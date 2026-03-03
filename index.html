@@ -199,6 +199,7 @@
             const sessionRoleRef  = useRef(null);       // mirrors sessionRole for use in callbacks
             const sessionPeersRef = useRef([]);         // mirrors sessionPeers for use in callbacks
             const charNameRef     = useRef('');
+            const sessionCodeRef  = useRef('');         // mirrors sessionCode for use in callbacks
             const isDraggingItem = draggedItem !== null;
             const [creationGridScale, setCreationGridScale] = useState(0.5);
             const creationGridCellMode = creationGridScale < 0.75; // true = cell mode, false = sub-cell mode, float is threshold percentage
@@ -2417,9 +2418,9 @@
                             : [...prev, { id: fromId, name: msg.name }]
                     );
                     if (sessionRoleRef.current === 'host') {
-                        // Reply with the current peer list so the new guest can mesh-connect
+                        // Reply with the current peer list — only include alive connections
                         const list = sessionPeersRef.current
-                            .filter(p => p.id !== fromId)
+                            .filter(p => p.id !== fromId && connMapRef.current.get(p.id)?.open)
                             .map(p => ({ id: p.id, name: p.name }));
                         sendTo(fromId, { type: 'welcome', hostName: charNameRef.current, list });
                         // Tell all existing peers about the newcomer
@@ -2439,20 +2440,36 @@
                     updateSessionPeers(prev => prev.map(p => p.id === fromId ? { ...p, name: msg.name } : p));
                 } else if (msg.type === 'transfer') {
                     setSetAsideItems(prev => [...prev, ...msg.items.map(assignFreshIds)]);
+                } else if (msg.type === 'ping') {
+                    sendTo(fromId, { type: 'pong' });
                 }
             };
 
             // Attaches close/error/data handlers to a DataConnection
             const wireConn = (conn) => {
                 conn.on('data', msg => handleSessionMsg(msg, conn.peer));
+                const guestReconnect = (code) => {
+                    // Lightweight cleanup: resets peer state but keeps sessionRole/sessionCode
+                    // in React state so the button stays teal and the room code stays visible.
+                    if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
+                    connMapRef.current.clear();
+                    sessionRoleRef.current = null;
+                    updateSessionPeers([]);
+                    setSessionStatus('reconnecting');
+                    setTimeout(() => joinSession(code), 800);
+                };
                 conn.on('close', () => {
                     if (sessionRoleRef.current === 'host') broadcastSession({ type: 'peer_left', id: conn.peer });
                     connMapRef.current.delete(conn.peer);
                     updateSessionPeers(prev => prev.filter(p => p.id !== conn.peer));
+                    if (sessionRoleRef.current === 'guest' && conn.peer === sessionCodeRef.current)
+                        guestReconnect(sessionCodeRef.current);
                 });
                 conn.on('error', () => {
                     connMapRef.current.delete(conn.peer);
                     updateSessionPeers(prev => prev.filter(p => p.id !== conn.peer));
+                    if (sessionRoleRef.current === 'guest' && conn.peer === sessionCodeRef.current)
+                        guestReconnect(sessionCodeRef.current);
                 });
             };
 
@@ -2492,9 +2509,14 @@
                     setSessionStatus('');
                 });
                 peer.on('connection', conn => {
-                    if (connMapRef.current.has(conn.peer)) return;
+                    const existing = connMapRef.current.get(conn.peer);
+                    if (existing?.open) return; // truly duplicate live connection
+                    if (existing) { try { existing.close(); } catch {} } // replace dead/stale connection
                     connMapRef.current.set(conn.peer, conn);
-                    updateSessionPeers(prev => [...prev, { id: conn.peer, name: '…' }]);
+                    updateSessionPeers(prev => {
+                        const without = prev.filter(p => p.id !== conn.peer);
+                        return [...without, { id: conn.peer, name: '…' }];
+                    });
                     wireConn(conn);
                 });
                 peer.on('error', err => {
@@ -2542,11 +2564,71 @@
                 confirmTransfer();
             };
 
+            // ── Session resilience effects ───────────────────────────────────────────────
+
+            // Save guest room code to sessionStorage so a page reload can auto-rejoin
+            useEffect(() => {
+                if (sessionRole === 'guest' && sessionCode) {
+                    sessionStorage.setItem('cubeventory_rejoin', sessionCode);
+                } else {
+                    sessionStorage.removeItem('cubeventory_rejoin');
+                }
+            }, [sessionRole, sessionCode]);
+
+            // On mount: if the page reloaded mid-session, rejoin automatically
+            useEffect(() => {
+                const code = sessionStorage.getItem('cubeventory_rejoin');
+                if (code) {
+                    sessionStorage.removeItem('cubeventory_rejoin');
+                    setSessionStatus('reconnecting');
+                    setTimeout(() => joinSession(code), 600);
+                }
+            }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+            // Host: ping all guests every 10 s and prune any with dead connections
+            useEffect(() => {
+                if (sessionRole !== 'host') return;
+                const id = setInterval(() => {
+                    broadcastSession({ type: 'ping' });
+                    sessionPeersRef.current.forEach(p => {
+                        const conn = connMapRef.current.get(p.id);
+                        const state = conn?.peerConnection?.connectionState;
+                        if (!conn?.open || state === 'failed' || state === 'disconnected') {
+                            try { conn?.close(); } catch {}
+                            connMapRef.current.delete(p.id);
+                            updateSessionPeers(prev => prev.filter(x => x.id !== p.id));
+                        }
+                    });
+                }, 10000);
+                return () => clearInterval(id);
+            }, [sessionRole]);
+
+            // Guest: when the tab becomes visible again, verify the host connection is still alive
+            useEffect(() => {
+                const onVisible = () => {
+                    if (document.visibilityState !== 'visible') return;
+                    if (sessionRoleRef.current !== 'guest') return;
+                    const hostConn = connMapRef.current.get(sessionCodeRef.current);
+                    if (!hostConn?.open) {
+                        const code = sessionCodeRef.current;
+                        if (!code) return;
+                        if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
+                        connMapRef.current.clear();
+                        sessionRoleRef.current = null;
+                        updateSessionPeers([]);
+                        setSessionStatus('reconnecting');
+                        setTimeout(() => joinSession(code), 600);
+                    }
+                };
+                document.addEventListener('visibilitychange', onVisible);
+                return () => document.removeEventListener('visibilitychange', onVisible);
+            }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
             const { width: creationGridWidth, height: creationGridHeight } = getCreationGridSize();
             const selectedItem = placedItems.find(item => item.id === selectedItemId) ||
                 (openContainerId ? placedItems.find(c => c.id === openContainerId)?.internalGrid.find(item => item.id === selectedItemId) : null);
-            charNameRef.current = characterName; // keep ref fresh for PeerJS callbacks
+            charNameRef.current    = characterName; // keep refs fresh for PeerJS callbacks
+            sessionCodeRef.current = sessionCode;
             const subCellSize = cellSize / SUB_DIVISIONS;
             const creationSubCellSize = 40 * creationGridScale;
             const targetSubCells = calcTargetSubCells();
@@ -2645,9 +2727,13 @@
                                             History
                                         </button>
                                         <button onClick={() => setShowSession(true)}
-                                            className={`flex items-center gap-1.5 px-3 py-2 rounded text-sm font-medium ${sessionRole ? 'bg-teal-500 text-white hover:bg-teal-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
+                                            className={`flex items-center gap-1.5 px-3 py-2 rounded text-sm font-medium ${
+                                                sessionStatus === 'reconnecting' ? 'bg-amber-400 text-white' :
+                                                sessionRole ? 'bg-teal-500 text-white hover:bg-teal-600' :
+                                                'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
                                             Session
-                                            {sessionRole && <span className="bg-white bg-opacity-30 text-current rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">{sessionPeers.length}</span>}
+                                            {sessionRole && sessionStatus !== 'reconnecting' && <span className="bg-white bg-opacity-30 text-current rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">{sessionPeers.length}</span>}
+                                            {sessionStatus === 'reconnecting' && <span className="text-xs">↻</span>}
                                         </button>
                                         <input ref={fileInputRef} type="file" accept=".json" onChange={importData} className="hidden" />
                                     </div>
@@ -3692,7 +3778,13 @@
                                     <button onClick={() => setShowSession(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
                                 </div>
 
-                                {!sessionRole ? (
+                                {sessionRole && sessionStatus === 'reconnecting' && (
+                                    <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 text-sm text-amber-700 text-center">
+                                        Connection lost — reconnecting…
+                                    </div>
+                                )}
+
+                                {!sessionRole && sessionStatus !== 'reconnecting' ? (
                                     <>
                                         <p className="text-xs text-gray-500 mb-4">
                                             Start or join a session to send items directly to other players — no QR scanning needed.
