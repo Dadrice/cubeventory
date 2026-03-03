@@ -174,7 +174,8 @@
             const [panStart, setPanStart] = useState({ x: 0, y: 0 });
             const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 });
             const [draggedSlotPosition, setDraggedSlotPosition] = useState({ row: 0, col: 0 }); // position for ghost rendering of slot-dragged items
-            const [showDropConfirm, setShowDropConfirm] = useState(false);
+            const [discardTarget,   setDiscardTarget]   = useState(null); // {id, name} while discard confirmation is open
+            const [libDeleteId,    setLibDeleteId]    = useState(null);
             const [isPainting, setIsPainting] = useState(false);
             const [paintMode, setPaintMode] = useState(null); // 'add' or 'remove'
             const fileInputRef = useRef(null);
@@ -872,7 +873,7 @@
                             return c;
                         }));
                         setSelectedItemId(null);
-                        setShowDropConfirm(false);
+                        setDiscardTarget(null);
                         return;
                     }
                 }
@@ -880,7 +881,7 @@
                 // Original main grid logic
                 setPlacedItems(prev => prev.filter(item => item.id !== itemId));
                 setSelectedItemId(null);
-                setShowDropConfirm(false);
+                setDiscardTarget(null);
             };
 
             const setItemDown = (itemId) => {
@@ -948,7 +949,7 @@
             };
 
             const handleItemClick = (e, item) => {
-                if (!showDropConfirm) { // Only allow selection changes when not confirming drop
+                if (!discardTarget) { // Only allow selection changes when not confirming drop
                     setSelectedItemId(item.id);
                 }
             };
@@ -1455,7 +1456,7 @@
             };
 
             const handleBackgroundPointerDown = (e) => {
-                if (draggedItem || showDropConfirm) return;
+                if (draggedItem || discardTarget) return;
 
                 // Placement mode: tap grid to place item
                 if (placementMode) {
@@ -1490,7 +1491,7 @@
                     setScrollOffset({ x: gridContainerRef.current.scrollLeft, y: gridContainerRef.current.scrollTop });
                 }
 
-                if (!showDropConfirm) {
+                if (!discardTarget) {
                     setSelectedItemId(null);
                 }
             };
@@ -2445,6 +2446,11 @@
                     updateSessionPeers(prev => prev.map(p => p.id === fromId ? { ...p, name: msg.name } : p));
                 } else if (msg.type === 'transfer') {
                     setSetAsideItems(prev => [...prev, ...msg.items.map(assignFreshIds)]);
+                    setItems(prev => {
+                        const toAdd = msg.items.filter(mi => !prev.some(li => li.name === mi.name && li.type === mi.type));
+                        if (!toAdd.length) return prev;
+                        return [...prev, ...toAdd.map(mi => ({ ...mi, id: Date.now() + Math.random() }))];
+                    });
                 } else if (msg.type === 'ping') {
                     sendTo(fromId, { type: 'pong' });
                 } else if (msg.type === 'pong') {
@@ -2590,11 +2596,10 @@
                     if (autoReconnectRef.current) {
                         // If the code is persistently taken, it's likely held by the elected new host.
                         // Switch from host to guest so the original host rejoins as a peer instead.
-                        if (err.type === 'unavailable-id'
-                            && autoReconnectRef.current.role === 'host'
-                            && autoReconnectRef.current.attempts >= 6) {
+                        // Alternate host↔guest on each failure: unavailable-id means the code is
+                        // taken → try as guest; any guest failure → try as host again.
+                        if (err.type === 'unavailable-id' && autoReconnectRef.current.role === 'host')
                             autoReconnectRef.current = { ...autoReconnectRef.current, role: 'guest' };
-                        }
                         scheduleReconnect();
                     } else if (sessionRoleRef.current === 'host') {
                         // Lost signaling connection after being established — re-establish as host
@@ -2621,8 +2626,11 @@
                 const openTimeout = setTimeout(() => {
                     if (peerRef.current !== peer) return;
                     peer.destroy(); peerRef.current = null;
-                    if (autoReconnectRef.current) scheduleReconnect();
-                    else setSessionStatus('error');
+                    if (autoReconnectRef.current) {
+                        if (autoReconnectRef.current.role === 'guest')
+                            autoReconnectRef.current = { ...autoReconnectRef.current, role: 'host' };
+                        scheduleReconnect();
+                    } else setSessionStatus('error');
                 }, 15000);
                 // Accept incoming connections from other guests (mesh)
                 peer.on('connection', inConn => {
@@ -2650,7 +2658,9 @@
                     clearTimeout(openTimeout);
                     if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
                     if (autoReconnectRef.current) {
-                        scheduleReconnect(); // any error during reconnect loop — just retry
+                        if (autoReconnectRef.current.role === 'guest')
+                            autoReconnectRef.current = { ...autoReconnectRef.current, role: 'host' };
+                        scheduleReconnect();
                     } else {
                         setSessionStatus(err.type === 'peer-unavailable' ? 'not-found' : 'error');
                         leaveSession();
@@ -3089,6 +3099,7 @@
                                                         </div>
                                                         <button onClick={() => addItemToGrid(item)} className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600 flex-shrink-0">Add</button>
                                         <button onClick={() => addLibraryItemToQueue(item)} className="bg-teal-500 text-white px-2 py-1 rounded text-xs hover:bg-teal-600 flex-shrink-0">Send</button>
+                                        <button onClick={() => setLibDeleteId(item.id)} className="bg-red-400 text-white px-2 py-1 rounded text-xs hover:bg-red-500 flex-shrink-0">Delete</button>
                                                     </div>
                                                 ))}
                                             </div>
@@ -3219,7 +3230,7 @@
                                                             }}
                                                             onClick={(e) => {
                                                               e.stopPropagation();
-                                                              if (!showDropConfirm) setSelectedItemId(item.id);
+                                                              if (!discardTarget) setSelectedItemId(item.id);
                                                             }}
                                                             onPointerDown={(e) => {
                                                               e.target.setPointerCapture(e.pointerId);
@@ -3352,7 +3363,7 @@
                                 e.stopPropagation();
                                 // Only deselect if clicking the background (not an item)
                                 if (e.target === e.currentTarget || e.target.closest('.absolute') === null) {
-                                  if (!showDropConfirm) {
+                                  if (!discardTarget) {
                                     setSelectedItemId(null);
                                   }
                                 }
@@ -3754,7 +3765,7 @@
                         </div>
                     )}
 
-                    {selectedItem && !showDropConfirm && !placementMode && (
+                    {selectedItem && !discardTarget && !placementMode && (
                         <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-300 px-3 pt-2 pb-3 flex flex-col gap-2 z-50">
                             <div className="text-center text-sm font-semibold text-gray-700 truncate px-2">{selectedItem.name}</div>
                             <div className="flex gap-2">
@@ -3790,23 +3801,42 @@
                                 <span className="text-xs">Set Down</span>
                               </button>
                             )}
-                            <button onClick={() => setShowDropConfirm(true)} className="flex flex-col items-center gap-1 bg-red-500 text-white px-4 py-3 rounded hover:bg-red-600 flex-1">
+                            <button onClick={() => setDiscardTarget({ id: selectedItemId, name: selectedItem.name })} className="flex flex-col items-center gap-1 bg-red-500 text-white px-4 py-3 rounded hover:bg-red-600 flex-1">
                                 <Trash2 size={24} />
-                                <span className="text-xs">Drop</span>
+                                <span className="text-xs">Discard</span>
                             </button>
                             </div>
                         </div>
                     )}
 
-                    {showDropConfirm && (
+                    {discardTarget && (
                         <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-red-500 p-3 z-50">
-                            <p className="text-center mb-2 font-medium">Drop {selectedItem?.name}?</p>
+                            <p className="text-center mb-2 font-medium">Discard {discardTarget.name}?</p>
                             <div className="flex gap-2">
-                                <button onClick={() => removeItem(selectedItemId)} className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 flex-1">Yes, Drop</button>
-                                <button onClick={() => setShowDropConfirm(false)} className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
+                                <button onClick={() => removeItem(discardTarget.id)} className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 flex-1">Yes, Discard</button>
+                                <button onClick={() => setDiscardTarget(null)} className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
                             </div>
                         </div>
                     )}
+
+                    {libDeleteId && (() => {
+                        const target = items.find(i => i.id === libDeleteId);
+                        return (
+                            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[2000]"
+                                onClick={() => setLibDeleteId(null)}>
+                                <div className="bg-white rounded-lg p-5 max-w-xs w-full mx-4" onClick={e => e.stopPropagation()}>
+                                    <h3 className="font-bold text-lg mb-2">Delete from Library?</h3>
+                                    <p className="text-sm text-gray-600 mb-4">
+                                        Remove <strong>{target?.name}</strong> from your library? Items already placed on the grid are not affected.
+                                    </p>
+                                    <div className="flex gap-2 justify-end">
+                                        <button onClick={() => setLibDeleteId(null)} className="px-4 py-2 rounded border text-sm hover:bg-gray-100">Cancel</button>
+                                        <button onClick={() => { setItems(prev => prev.filter(i => i.id !== libDeleteId)); setLibDeleteId(null); }} className="bg-red-500 text-white px-4 py-2 rounded text-sm hover:bg-red-600">Delete</button>
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })()}
 
                     {deleteConfirmStep > 0 && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[2000]"
