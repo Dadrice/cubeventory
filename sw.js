@@ -1,5 +1,5 @@
 // Bump this version whenever you want all clients to ditch the old cache.
-const CACHE = 'cubeventory-v2';
+const CACHE = 'cubeventory-v3';
 
 // All CDN scripts the app needs to run offline.
 // These must exactly match the src= URLs in index.html.
@@ -60,7 +60,7 @@ self.addEventListener('fetch', event => {
       caches.match(event.request).then(cached => {
         if (cached) return cached;
         return fetch(event.request).then(r => {
-          if (r.ok) caches.open(CACHE).then(cache => cache.put(event.request, r.clone()));
+          if (r.ok) { const c = r.clone(); caches.open(CACHE).then(cache => cache.put(event.request, c)); }
           return r;
         });
       })
@@ -70,7 +70,7 @@ self.addEventListener('fetch', event => {
     event.respondWith(
       fetch(event.request)
         .then(r => {
-          if (r.ok) caches.open(CACHE).then(cache => cache.put(event.request, r.clone()));
+          if (r.ok) { const c = r.clone(); caches.open(CACHE).then(cache => cache.put(event.request, c)); }
           return r;
         })
         .catch(() => caches.match(event.request)
