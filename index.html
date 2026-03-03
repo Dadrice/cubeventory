@@ -874,11 +874,11 @@
                 setSelectedItemId(null);
             };
 
-            const pickUpItem = (setAsideId) => {
-                const item = setAsideItems.find(i => i.setAsideId === setAsideId);
+            const pickUpItem = (itemId) => {
+                const item = setAsideItems.find(i => i.id === itemId);
                 if (!item) return;
                 const { setAsideId: _, ...itemWithoutSetAsideId } = item;
-                setPlacementMode({ item: itemWithoutSetAsideId, source: 'setAside', setAsideId });
+                setPlacementMode({ item: itemWithoutSetAsideId, source: 'setAside', setAsideId: itemId });
             };
 
             const addItemToGrid = (itemTemplate, targetContainerId = null) => {
@@ -1455,7 +1455,7 @@
                         const placedItem = { ...item, position: { row: clampedRow, col: clampedCol } };
                         setPlacedItems(prev => [...prev, placedItem]);
                         if (placementMode.source === 'setAside') {
-                            setSetAsideItems(prev => prev.filter(i => i.setAsideId !== placementMode.setAsideId));
+                            setSetAsideItems(prev => prev.filter(i => i.id !== placementMode.setAsideId));
                         }
                         setPlacementMode(null);
                     }
@@ -2871,7 +2871,7 @@
                                 <h2 className="text-lg font-bold mb-2">On the Ground</h2>
                                 <div className="flex flex-col gap-2">
                                     {setAsideItems.map(item => (
-                                        <div key={item.setAsideId} className="flex items-center gap-2">
+                                        <div key={item.id} className="flex items-center gap-2">
                                             <div
                                                 className="flex-shrink-0 rounded"
                                                 style={{ width: 16, height: 16, backgroundColor: item.color }}
@@ -2883,7 +2883,7 @@
                                                 </span>
                                             </span>
                                             <button
-                                                onClick={() => pickUpItem(item.setAsideId)}
+                                                onClick={() => pickUpItem(item.id)}
                                                 className="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600 flex-shrink-0"
                                             >Pick Up</button>
                                         </div>
