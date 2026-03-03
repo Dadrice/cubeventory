@@ -202,6 +202,7 @@
             const sessionCodeRef   = useRef('');          // mirrors sessionCode for use in callbacks
             const retryTimerRef   = useRef(null);        // setTimeout handle for scheduled reconnects
             const autoReconnectRef = useRef(null);       // {code, role, attempts} while auto-reconnecting
+            const lastHostPongRef  = useRef(Date.now()); // timestamp of last pong received from host (guest only)
             const isDraggingItem = draggedItem !== null;
             const [creationGridScale, setCreationGridScale] = useState(0.5);
             const creationGridCellMode = creationGridScale < 0.75; // true = cell mode, false = sub-cell mode, float is threshold percentage
@@ -2433,6 +2434,7 @@
                     }
                 } else if (msg.type === 'welcome') {
                     // We're a guest: learn the host's name and connect directly to all existing peers
+                    lastHostPongRef.current = Date.now(); // reset pong timer on fresh connection
                     updateSessionPeers(prev => prev.map(p => p.id === fromId ? { ...p, name: msg.hostName } : p));
                     msg.list.forEach(p => openSessionConn(p.id, p.name));
                 } else if (msg.type === 'peer_left') {
@@ -2444,6 +2446,8 @@
                     setSetAsideItems(prev => [...prev, ...msg.items.map(assignFreshIds)]);
                 } else if (msg.type === 'ping') {
                     sendTo(fromId, { type: 'pong' });
+                } else if (msg.type === 'pong') {
+                    lastHostPongRef.current = Date.now(); // host is alive
                 }
             };
 
@@ -2457,6 +2461,7 @@
                     connMapRef.current.clear();
                     sessionRoleRef.current = null;
                     updateSessionPeers([]);
+                    lastHostPongRef.current = Date.now(); // reset so heartbeat doesn't fire immediately
                     autoReconnectRef.current = { code, role: 'guest', attempts: 0 };
                     setSessionStatus('reconnecting');
                     setTimeout(() => joinSession(code), 800);
@@ -2658,6 +2663,34 @@
                 }, 10000);
                 return () => clearInterval(id);
             }, [sessionRole]);
+
+            // Guest: periodic health check — detects when host has gone away (mirrors host heartbeat)
+            useEffect(() => {
+                if (sessionRole !== 'guest') return;
+                const id = setInterval(() => {
+                    if (autoReconnectRef.current) return; // already reconnecting
+                    const code = sessionCodeRef.current;
+                    if (!code) return;
+                    const conn = connMapRef.current.get(code);
+                    const state = conn?.peerConnection?.connectionState;
+                    const dead = !conn?.open || state === 'failed' || state === 'disconnected'
+                                 || Date.now() - lastHostPongRef.current > 25000;
+                    if (dead) {
+                        if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
+                        connMapRef.current.clear();
+                        sessionRoleRef.current = null;
+                        updateSessionPeers([]);
+                        lastHostPongRef.current = Date.now();
+                        autoReconnectRef.current = { code, role: 'guest', attempts: 0 };
+                        setSessionStatus('reconnecting');
+                        setTimeout(() => joinSession(code), 600);
+                        return;
+                    }
+                    // Ping the host so we receive a pong and keep lastHostPongRef fresh
+                    try { conn.send({ type: 'ping' }); } catch {}
+                }, 10000);
+                return () => clearInterval(id);
+            }, [sessionRole]); // eslint-disable-line react-hooks/exhaustive-deps
 
             // Guest: when the tab becomes visible again, verify the host connection is still alive
             useEffect(() => {
