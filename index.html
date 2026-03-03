@@ -199,7 +199,9 @@
             const sessionRoleRef  = useRef(null);       // mirrors sessionRole for use in callbacks
             const sessionPeersRef = useRef([]);         // mirrors sessionPeers for use in callbacks
             const charNameRef     = useRef('');
-            const sessionCodeRef  = useRef('');         // mirrors sessionCode for use in callbacks
+            const sessionCodeRef   = useRef('');          // mirrors sessionCode for use in callbacks
+            const retryTimerRef   = useRef(null);        // setTimeout handle for scheduled reconnects
+            const autoReconnectRef = useRef(null);       // {code, role, attempts} while auto-reconnecting
             const isDraggingItem = draggedItem !== null;
             const [creationGridScale, setCreationGridScale] = useState(0.5);
             const creationGridCellMode = creationGridScale < 0.75; // true = cell mode, false = sub-cell mode, float is threshold percentage
@@ -2455,6 +2457,7 @@
                     connMapRef.current.clear();
                     sessionRoleRef.current = null;
                     updateSessionPeers([]);
+                    autoReconnectRef.current = { code, role: 'guest', attempts: 0 };
                     setSessionStatus('reconnecting');
                     setTimeout(() => joinSession(code), 800);
                 };
@@ -2485,7 +2488,34 @@
                 wireConn(conn);
             };
 
+            // Retry helper: backs off 5 s per attempt, gives up after 12 tries (~60 s total)
+            const scheduleReconnect = () => {
+                const info = autoReconnectRef.current;
+                if (!info) return;
+                if (info.attempts >= 12) {
+                    autoReconnectRef.current = null;
+                    if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
+                    connMapRef.current.clear();
+                    sessionRoleRef.current = null;
+                    updateSessionPeers([]);
+                    setSessionStatus('reconnect-failed');
+                    return;
+                }
+                autoReconnectRef.current = { ...info, attempts: info.attempts + 1 };
+                if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
+                connMapRef.current.clear();
+                updateSessionPeers([]);
+                setSessionStatus('reconnecting');
+                retryTimerRef.current = setTimeout(() => {
+                    if (!autoReconnectRef.current) return;
+                    if (autoReconnectRef.current.role === 'host') createSessionWithCode(autoReconnectRef.current.code);
+                    else joinSession(autoReconnectRef.current.code);
+                }, 5000);
+            };
+
             const leaveSession = () => {
+                autoReconnectRef.current = null;
+                clearTimeout(retryTimerRef.current);
                 if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
                 connMapRef.current.clear();
                 sessionRoleRef.current = null;
@@ -2497,12 +2527,21 @@
 
             const createSession = () => {
                 if (peerRef.current) return;
+                autoReconnectRef.current = null; // manual create — no retry
                 const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
                 const code = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
                 setSessionStatus('connecting');
+                createSessionWithCode(code);
+            };
+
+            // Creates (or reclaims) a host session with a specific room code.
+            // Used by createSession and by the retry path when reconnecting as host.
+            const createSessionWithCode = (code) => {
+                if (peerRef.current) return;
                 const peer = new Peer(code, { debug: 0 });
                 peerRef.current = peer;
                 peer.on('open', () => {
+                    autoReconnectRef.current = null;
                     sessionRoleRef.current = 'host';
                     setSessionRole('host');
                     setSessionCode(code);
@@ -2510,8 +2549,8 @@
                 });
                 peer.on('connection', conn => {
                     const existing = connMapRef.current.get(conn.peer);
-                    if (existing?.open) return; // truly duplicate live connection
-                    if (existing) { try { existing.close(); } catch {} } // replace dead/stale connection
+                    if (existing?.open) return;
+                    if (existing) { try { existing.close(); } catch {} }
                     connMapRef.current.set(conn.peer, conn);
                     updateSessionPeers(prev => {
                         const without = prev.filter(p => p.id !== conn.peer);
@@ -2520,8 +2559,14 @@
                     wireConn(conn);
                 });
                 peer.on('error', err => {
-                    setSessionStatus(err.type === 'unavailable-id' ? 'code-taken' : 'error');
-                    leaveSession();
+                    if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
+                    if (err.type === 'unavailable-id' && autoReconnectRef.current) {
+                        scheduleReconnect(); // PeerJS hasn't released the old ID yet — retry
+                    } else {
+                        setSessionStatus(err.type === 'unavailable-id' ? 'code-taken' : 'error');
+                        autoReconnectRef.current = null;
+                        leaveSession();
+                    }
                 });
             };
 
@@ -2554,8 +2599,14 @@
                     wireConn(conn);
                 });
                 peer.on('error', err => {
-                    setSessionStatus(err.type === 'peer-unavailable' ? 'not-found' : 'error');
-                    leaveSession();
+                    if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
+                    if (err.type === 'peer-unavailable' && autoReconnectRef.current) {
+                        scheduleReconnect(); // host not back yet — retry
+                    } else {
+                        setSessionStatus(err.type === 'peer-unavailable' ? 'not-found' : 'error');
+                        autoReconnectRef.current = null;
+                        leaveSession();
+                    }
                 });
             };
 
@@ -2566,23 +2617,28 @@
 
             // ── Session resilience effects ───────────────────────────────────────────────
 
-            // Save guest room code to sessionStorage so a page reload can auto-rejoin
+            // Save session info (role + code) for both hosts and guests so page reloads can rejoin
             useEffect(() => {
-                if (sessionRole === 'guest' && sessionCode) {
-                    sessionStorage.setItem('cubeventory_rejoin', sessionCode);
+                if (sessionRole && sessionCode) {
+                    sessionStorage.setItem('cubeventory_rejoin', JSON.stringify({ role: sessionRole, code: sessionCode }));
                 } else {
                     sessionStorage.removeItem('cubeventory_rejoin');
                 }
             }, [sessionRole, sessionCode]);
 
-            // On mount: if the page reloaded mid-session, rejoin automatically
+            // On mount: if the page reloaded mid-session, silently rejoin (with retry loop)
             useEffect(() => {
-                const code = sessionStorage.getItem('cubeventory_rejoin');
-                if (code) {
-                    sessionStorage.removeItem('cubeventory_rejoin');
-                    setSessionStatus('reconnecting');
-                    setTimeout(() => joinSession(code), 600);
-                }
+                const raw = sessionStorage.getItem('cubeventory_rejoin');
+                if (!raw) return;
+                sessionStorage.removeItem('cubeventory_rejoin');
+                let role = 'guest', code = raw;
+                try { const p = JSON.parse(raw); role = p.role || 'guest'; code = p.code || raw; } catch {}
+                autoReconnectRef.current = { code, role, attempts: 0 };
+                setSessionStatus('reconnecting');
+                setTimeout(() => {
+                    if (role === 'host') createSessionWithCode(code);
+                    else joinSession(code);
+                }, 800);
             }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
             // Host: ping all guests every 10 s and prune any with dead connections
@@ -2616,6 +2672,7 @@
                         connMapRef.current.clear();
                         sessionRoleRef.current = null;
                         updateSessionPeers([]);
+                        autoReconnectRef.current = { code, role: 'guest', attempts: 0 };
                         setSessionStatus('reconnecting');
                         setTimeout(() => joinSession(code), 600);
                     }
@@ -2728,12 +2785,13 @@
                                         </button>
                                         <button onClick={() => setShowSession(true)}
                                             className={`flex items-center gap-1.5 px-3 py-2 rounded text-sm font-medium ${
-                                                sessionStatus === 'reconnecting' ? 'bg-amber-400 text-white' :
+                                                (sessionStatus === 'reconnecting' || sessionStatus === 'reconnect-failed') ? 'bg-amber-400 text-white' :
                                                 sessionRole ? 'bg-teal-500 text-white hover:bg-teal-600' :
                                                 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
                                             Session
-                                            {sessionRole && sessionStatus !== 'reconnecting' && <span className="bg-white bg-opacity-30 text-current rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">{sessionPeers.length}</span>}
+                                            {sessionRole && sessionStatus !== 'reconnecting' && sessionStatus !== 'reconnect-failed' && <span className="bg-white bg-opacity-30 text-current rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">{sessionPeers.length}</span>}
                                             {sessionStatus === 'reconnecting' && <span className="text-xs">↻</span>}
+                                            {sessionStatus === 'reconnect-failed' && <span className="text-xs font-bold">!</span>}
                                         </button>
                                         <input ref={fileInputRef} type="file" accept=".json" onChange={importData} className="hidden" />
                                     </div>
@@ -3778,9 +3836,14 @@
                                     <button onClick={() => setShowSession(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
                                 </div>
 
-                                {sessionRole && sessionStatus === 'reconnecting' && (
-                                    <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 text-sm text-amber-700 text-center">
-                                        Connection lost — reconnecting…
+                                {sessionRole && (sessionStatus === 'reconnecting' || sessionStatus === 'reconnect-failed') && (
+                                    <div className={`border rounded-lg px-3 py-2 mb-4 text-sm text-center ${
+                                        sessionStatus === 'reconnect-failed'
+                                            ? 'bg-red-50 border-red-200 text-red-700'
+                                            : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+                                        {sessionStatus === 'reconnect-failed'
+                                            ? 'Could not reconnect — leave and rejoin to try again.'
+                                            : 'Connection lost — reconnecting…'}
                                     </div>
                                 )}
 
