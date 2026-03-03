@@ -203,6 +203,7 @@
             const retryTimerRef   = useRef(null);        // setTimeout handle for scheduled reconnects
             const autoReconnectRef = useRef(null);       // {code, role, attempts} while auto-reconnecting
             const lastHostPongRef  = useRef(Date.now()); // timestamp of last pong received from host (guest only)
+            const sessionHydrated  = useRef(false);      // true after restore effect has run, guards save effect
             const isDraggingItem = draggedItem !== null;
             const [creationGridScale, setCreationGridScale] = useState(0.5);
             const creationGridCellMode = creationGridScale < 0.75; // true = cell mode, false = sub-cell mode, float is threshold percentage
@@ -2622,8 +2623,10 @@
 
             // ── Session resilience effects ───────────────────────────────────────────────
 
-            // Save session info (role + code) for both hosts and guests so page reloads can rejoin
+            // Save session info (role + code) for both hosts and guests so page reloads can rejoin.
+            // Guard: skip the very first run — the restore effect (below) must read sessionStorage first.
             useEffect(() => {
+                if (!sessionHydrated.current) return;
                 if (sessionRole && sessionCode) {
                     sessionStorage.setItem('cubeventory_rejoin', JSON.stringify({ role: sessionRole, code: sessionCode }));
                 } else {
@@ -2633,6 +2636,7 @@
 
             // On mount: if the page reloaded mid-session, silently rejoin (with retry loop)
             useEffect(() => {
+                sessionHydrated.current = true; // allow save effect to run from now on
                 const raw = sessionStorage.getItem('cubeventory_rejoin');
                 if (!raw) return;
                 sessionStorage.removeItem('cubeventory_rejoin');
