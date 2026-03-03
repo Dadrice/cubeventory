@@ -191,8 +191,7 @@
             const scanCanvasRef  = useRef(null);
             const scanAnimRef    = useRef(null);
             const scanStreamRef  = useRef(null);
-            const cameraInputRef  = useRef(null);
-            const galleryInputRef = useRef(null);
+            const detectorRef    = useRef(null);
             const copiedCodeTimerRef = useRef(null);
             const isDraggingItem = draggedItem !== null;
             const [creationGridScale, setCreationGridScale] = useState(0.5);
@@ -2015,38 +2014,36 @@
                     if (scanStreamRef.current) { scanStreamRef.current.getTracks().forEach(t => t.stop()); scanStreamRef.current = null; }
                 };
 
-                const scan = () => {
-                    if (!active || !videoRef.current || !scanCanvasRef.current) return;
+                // BarcodeDetector is the native hardware scanner (same pipeline as the camera app).
+                // It handles dense QR codes far better than jsQR and doesn't need a canvas copy.
+                // jsQR runs as fallback for Firefox / Safari which lack BarcodeDetector.
+                const scan = async () => {
+                    if (!active) return;
                     const video = videoRef.current;
-                    const canvas = scanCanvasRef.current;
-                    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(video, 0, 0);
-                        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                        const code = jsQR(imageData.data, imageData.width, imageData.height);
-                        if (code) {
+                    if (video?.readyState === video.HAVE_ENOUGH_DATA) {
+                        if (detectorRef.current) {
                             try {
-                                const decompressed = LZString.decompressFromEncodedURIComponent(code.data);
-                                const parsed = JSON.parse(decompressed);
-                                if (parsed.type === 'cubeventory_transfer' && Array.isArray(parsed.items)) {
-                                    const received = parsed.items.map(assignFreshIds);
-                                    setSetAsideItems(prev => [...prev, ...received]);
-                                    stopCamera();
-                                    setShowReceiveModal(false);
-                                    return;
+                                const results = await detectorRef.current.detect(video);
+                                for (const r of results) {
+                                    if (receiveTransferCode(r.rawValue)) { stopCamera(); return; }
                                 }
-                            } catch { /* keep scanning */ }
+                            } catch { /* transient error — keep scanning */ }
+                        } else {
+                            // jsQR: draw frame to canvas then decode
+                            const canvas = scanCanvasRef.current;
+                            if (canvas) {
+                                canvas.width = video.videoWidth;
+                                canvas.height = video.videoHeight;
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(video, 0, 0);
+                                const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+                                if (code && receiveTransferCode(code.data)) { stopCamera(); return; }
+                            }
                         }
                     }
-                    scanAnimRef.current = requestAnimationFrame(scan);
+                    if (active) scanAnimRef.current = requestAnimationFrame(scan);
                 };
 
-                // Bail out gracefully (no alert) if the Camera API is unavailable.
-                // This happens on Android when the page is served over plain HTTP or
-                // opened as a file:// URL — non-secure contexts block getUserMedia.
-                // The manual paste fallback in the modal still works in all cases.
                 if (!navigator.mediaDevices?.getUserMedia) {
                     setCameraStatus('unavailable');
                     return stopCamera;
@@ -2055,8 +2052,11 @@
                 const startCamera = async () => {
                     let stream;
                     try {
-                        // `ideal` is a soft hint — the browser picks the closest match instead of failing
-                        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+                        // Request max resolution — `ideal` is a soft hint so it won't fail if unavailable.
+                        // Higher resolution = more QR modules visible = better decode of dense codes.
+                        stream = await navigator.mediaDevices.getUserMedia({
+                            video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } }
+                        });
                     } catch {
                         try {
                             stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -2067,6 +2067,18 @@
                     }
                     if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
                     scanStreamRef.current = stream;
+
+                    // Initialise BarcodeDetector once per session
+                    detectorRef.current = null;
+                    if ('BarcodeDetector' in window) {
+                        try {
+                            const formats = await BarcodeDetector.getSupportedFormats();
+                            if (formats.includes('qr_code')) {
+                                detectorRef.current = new BarcodeDetector({ formats: ['qr_code'] });
+                            }
+                        } catch { }
+                    }
+
                     if (videoRef.current) {
                         videoRef.current.srcObject = stream;
                         try { await videoRef.current.play(); } catch { /* autoplay may be blocked */ }
@@ -2363,60 +2375,6 @@
                 return false;
             };
 
-            // Decode a QR code from a still image file.
-            // Reads into an ArrayBuffer first and re-wraps as a Blob to avoid
-            // file-handle permission issues on some Android/file:// configurations.
-            const decodeQRFromFile = async (file) => {
-                let blob;
-                try {
-                    const buf = await file.arrayBuffer();
-                    blob = new Blob([buf], { type: file.type || 'image/png' });
-                } catch { return; }
-
-                // Attempt 1: native BarcodeDetector (Chrome/Brave Android 83+, desktop Chrome 88+).
-                if ('BarcodeDetector' in window) {
-                    try {
-                        const supported = await BarcodeDetector.getSupportedFormats();
-                        if (supported.includes('qr_code')) {
-                            const detector = new BarcodeDetector({ formats: ['qr_code'] });
-                            const bitmap = await createImageBitmap(blob);
-                            const results = await detector.detect(bitmap);
-                            bitmap.close();
-                            for (const r of results) {
-                                if (receiveTransferCode(r.rawValue)) return;
-                            }
-                        }
-                    } catch { /* fall through to jsQR */ }
-                }
-
-                // Attempt 2: jsQR with multi-scale passes.
-                const url = URL.createObjectURL(blob);
-                const img = new Image();
-                img.onload = () => {
-                    URL.revokeObjectURL(url);
-                    const tryDecode = (maxDim) => {
-                        let w = img.width, h = img.height;
-                        if (w > maxDim || h > maxDim) {
-                            const s = maxDim / Math.max(w, h);
-                            w = Math.round(w * s); h = Math.round(h * s);
-                        }
-                        const c = document.createElement('canvas');
-                        c.width = w; c.height = h;
-                        const ctx = c.getContext('2d');
-                        ctx.imageSmoothingEnabled = true;
-                        ctx.imageSmoothingQuality = 'high';
-                        ctx.drawImage(img, 0, 0, w, h);
-                        return jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'attemptBoth' });
-                    };
-                    for (const dim of [800, 1200, 500, 1600]) {
-                        const code = tryDecode(dim);
-                        if (code && receiveTransferCode(code.data)) return;
-                    }
-                    alert('No valid Cubeventory QR found — try again with better lighting and the whole QR in frame.');
-                };
-                img.onerror = () => { URL.revokeObjectURL(url); };
-                img.src = url;
-            };
 
             const { width: creationGridWidth, height: creationGridHeight } = getCreationGridSize();
             const selectedItem = placedItems.find(item => item.id === selectedItemId) ||
@@ -3728,34 +3686,14 @@
                                 </div>
                             )}
 
-                            {/* Bottom panel — file-capture button + paste fallback */}
+                            {/* Bottom panel — paste fallback */}
                             <div className="bg-white px-4 pt-4 pb-5 flex-shrink-0">
 
                                 {cameraStatus === 'unavailable' && (
                                     <p className="text-sm text-gray-500 mb-3 text-center">
-                                        Live scan unavailable. Take a photo of the QR code or load the downloaded QR image file.
+                                        Camera unavailable — paste the transfer code below instead.
                                     </p>
                                 )}
-                                <div className="flex gap-2 mb-3">
-                                    <button
-                                        onClick={() => cameraInputRef.current?.click()}
-                                        className="flex-1 py-2.5 rounded-lg font-semibold text-sm bg-teal-500 text-white hover:bg-teal-600">
-                                        Take Photo
-                                    </button>
-                                    <button
-                                        onClick={() => galleryInputRef.current?.click()}
-                                        className="flex-1 py-2.5 rounded-lg font-semibold text-sm bg-gray-100 text-gray-700 border hover:bg-gray-200">
-                                        Load from File
-                                    </button>
-                                </div>
-                                {/* Take Photo — `capture="environment"` opens the rear camera directly on mobile */}
-                                <input ref={cameraInputRef} type="file" accept="image/*" capture="environment"
-                                    onChange={(e) => { if (e.target.files[0]) decodeQRFromFile(e.target.files[0]); e.target.value = ''; }}
-                                    className="hidden" />
-                                {/* Load from File — no capture attribute, so opens gallery/file picker */}
-                                <input ref={galleryInputRef} type="file" accept="image/*"
-                                    onChange={(e) => { if (e.target.files[0]) decodeQRFromFile(e.target.files[0]); e.target.value = ''; }}
-                                    className="hidden" />
 
                                 <div className="flex items-center gap-2 mb-3">
                                     <div className="flex-1 h-px bg-gray-200" />
