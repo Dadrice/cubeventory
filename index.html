@@ -2452,33 +2452,50 @@
                 }
             };
 
+            // When the host connection drops, elect a new host from the remaining guests.
+            // The peer with the lexicographically-smallest ID wins (deterministic, no extra signalling).
+            // The winner calls createSessionWithCode to reclaim the same room code;
+            // all others call joinSession — connecting to whoever claims the code first.
+            // If the original host comes back, it races the elected guest for the code;
+            // whoever wins becomes (or stays) host, the other joins as a guest.
+            const handleHostDisconnect = (hostCode) => {
+                if (!hostCode) return;
+                // Remove host entry if still present (may already be gone from wireConn close handler)
+                try { connMapRef.current.get(hostCode)?.close(); } catch {}
+                connMapRef.current.delete(hostCode);
+                const myId = peerRef.current?.id;
+                const livingIds = [...connMapRef.current.entries()]
+                    .filter(([_, c]) => c.open).map(([id]) => id);
+                const allIds = [...livingIds, ...(myId ? [myId] : [])].sort();
+                const newRole = (myId && allIds.length > 0 && allIds[0] === myId) ? 'host' : 'guest';
+                if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
+                connMapRef.current.clear();
+                sessionRoleRef.current = null;
+                updateSessionPeers([]);
+                lastHostPongRef.current = Date.now();
+                autoReconnectRef.current = { code: hostCode, role: newRole, attempts: 0 };
+                setSessionStatus('reconnecting');
+                setTimeout(() => {
+                    if (newRole === 'host') createSessionWithCode(hostCode);
+                    else joinSession(hostCode);
+                }, 800);
+            };
+
             // Attaches close/error/data handlers to a DataConnection
             const wireConn = (conn) => {
                 conn.on('data', msg => handleSessionMsg(msg, conn.peer));
-                const guestReconnect = (code) => {
-                    // Lightweight cleanup: resets peer state but keeps sessionRole/sessionCode
-                    // in React state so the button stays teal and the room code stays visible.
-                    if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
-                    connMapRef.current.clear();
-                    sessionRoleRef.current = null;
-                    updateSessionPeers([]);
-                    lastHostPongRef.current = Date.now(); // reset so heartbeat doesn't fire immediately
-                    autoReconnectRef.current = { code, role: 'guest', attempts: 0 };
-                    setSessionStatus('reconnecting');
-                    setTimeout(() => joinSession(code), 800);
-                };
                 conn.on('close', () => {
                     if (sessionRoleRef.current === 'host') broadcastSession({ type: 'peer_left', id: conn.peer });
                     connMapRef.current.delete(conn.peer);
                     updateSessionPeers(prev => prev.filter(p => p.id !== conn.peer));
                     if (sessionRoleRef.current === 'guest' && conn.peer === sessionCodeRef.current)
-                        guestReconnect(sessionCodeRef.current);
+                        handleHostDisconnect(sessionCodeRef.current);
                 });
                 conn.on('error', () => {
                     connMapRef.current.delete(conn.peer);
                     updateSessionPeers(prev => prev.filter(p => p.id !== conn.peer));
                     if (sessionRoleRef.current === 'guest' && conn.peer === sessionCodeRef.current)
-                        guestReconnect(sessionCodeRef.current);
+                        handleHostDisconnect(sessionCodeRef.current);
                 });
             };
 
@@ -2571,7 +2588,14 @@
                 peer.on('error', err => {
                     if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
                     if (autoReconnectRef.current) {
-                        scheduleReconnect(); // any error during reconnect loop — just retry
+                        // If the code is persistently taken, it's likely held by the elected new host.
+                        // Switch from host to guest so the original host rejoins as a peer instead.
+                        if (err.type === 'unavailable-id'
+                            && autoReconnectRef.current.role === 'host'
+                            && autoReconnectRef.current.attempts >= 6) {
+                            autoReconnectRef.current = { ...autoReconnectRef.current, role: 'guest' };
+                        }
+                        scheduleReconnect();
                     } else if (sessionRoleRef.current === 'host') {
                         // Lost signaling connection after being established — re-establish as host
                         connMapRef.current.clear();
@@ -2697,17 +2721,7 @@
                     const state = conn?.peerConnection?.connectionState;
                     const dead = !conn?.open || state === 'failed' || state === 'disconnected'
                                  || Date.now() - lastHostPongRef.current > 25000;
-                    if (dead) {
-                        if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
-                        connMapRef.current.clear();
-                        sessionRoleRef.current = null;
-                        updateSessionPeers([]);
-                        lastHostPongRef.current = Date.now();
-                        autoReconnectRef.current = { code, role: 'guest', attempts: 0 };
-                        setSessionStatus('reconnecting');
-                        setTimeout(() => joinSession(code), 600);
-                        return;
-                    }
+                    if (dead) { handleHostDisconnect(code); return; }
                     // Ping the host so we receive a pong and keep lastHostPongRef fresh
                     try { conn.send({ type: 'ping' }); } catch {}
                 }, 10000);
@@ -2723,13 +2737,7 @@
                     if (!hostConn?.open) {
                         const code = sessionCodeRef.current;
                         if (!code) return;
-                        if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
-                        connMapRef.current.clear();
-                        sessionRoleRef.current = null;
-                        updateSessionPeers([]);
-                        autoReconnectRef.current = { code, role: 'guest', attempts: 0 };
-                        setSessionStatus('reconnecting');
-                        setTimeout(() => joinSession(code), 600);
+                        handleHostDisconnect(code);
                     }
                 };
                 document.addEventListener('visibilitychange', onVisible);
