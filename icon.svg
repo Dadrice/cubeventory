@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Rounded background -->
+  <rect width="512" height="512" rx="100" fill="#3b82f6"/>
+  <!-- Isometric cube -->
+  <!-- Top face (light) -->
+  <polygon points="256,96 412,186 256,276 100,186" fill="#eff6ff"/>
+  <!-- Left face (dark) -->
+  <polygon points="100,186 256,276 256,456 100,366" fill="#1e3a8a"/>
+  <!-- Right face (medium) -->
+  <polygon points="412,186 256,276 256,456 412,366" fill="#1d4ed8"/>
+</svg>

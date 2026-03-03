@@ -29,7 +29,11 @@
         .coin-input { -moz-appearance: textfield; appearance: textfield; }
     </style>
     <link rel="manifest" href="/cubeventory/manifest.json">
-    <meta name="theme-color" content="#0f172a">
+    <meta name="theme-color" content="#3b82f6">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Cubeventory">
+    <link rel="apple-touch-icon" href="/cubeventory/icon.svg">
 </head>
 <body>
     <div id="root"></div>
@@ -955,6 +959,7 @@
             };
 
             const handleItemDragStart = (e, item) => {
+              if (discardTarget) return; // lock highlight while discard confirmation is open
               e.preventDefault();
               e.stopPropagation();
 
@@ -3479,6 +3484,7 @@
                                           className="w-full h-full cursor-pointer"
                                           style={{ backgroundColor: slot.occupied.color, opacity: 0.85, touchAction: 'none' }}
                                           onPointerDown={(e) => {
+                                            if (discardTarget) return; // lock highlight while discard confirmation is open
                                             e.preventDefault();
                                             e.stopPropagation();
                                             e.target.setPointerCapture(e.pointerId);
