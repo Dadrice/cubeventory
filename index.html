@@ -111,7 +111,7 @@
         const SAVE_VERSION    = 2;
         const DEFAULT_CHAR_ID = 'char_default';
         const loadAutoSave = () => { try { return JSON.parse(localStorage.getItem(AUTOSAVE_KEY) || 'null'); } catch { return null; } };
-        const QR_MAX_CHARS = 2900; // QR v40 M-level EC safe limit (2953 alphanumeric)
+        const QR_MAX_CHARS = 2900; // QR v40 L-level EC byte limit (2953); L chosen over M for fewer modules = larger modules on screen
 
         function CubeventoryTracker() {
             const [characters, setCharacters] = useState(() => {
@@ -1989,9 +1989,9 @@
                 try {
                     qrInstanceRef.current = new QRCode(qrCodeRef.current, {
                         text: compressed,
-                        width: 256,
-                        height: 256,
-                        correctLevel: QRCode.CorrectLevel.M
+                        width: 320,
+                        height: 320,
+                        correctLevel: QRCode.CorrectLevel.L
                     });
                 } catch (e) {
                     qrCodeRef.current.innerHTML = '<p style="color:red;font-size:13px;padding:8px;">Payload too large — remove some items and try again.</p>';
@@ -2316,7 +2316,7 @@
             const assignFreshIds = (item) => {
                 const ts = Date.now();
                 const rnd = () => Math.random().toString(36).slice(2, 7);
-                const result = { ...item, id: `item_${ts}_${rnd()}`, position: { row: 0, col: 0 } };
+                const result = { ...item, id: `item_${ts}_${rnd()}`, setAsideId: `sa_${ts}_${rnd()}`, position: { row: 0, col: 0 } };
                 if (Array.isArray(result.internalGrid)) {
                     result.internalGrid = result.internalGrid.map(inner => ({
                         ...inner,
