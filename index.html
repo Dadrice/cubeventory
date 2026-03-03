@@ -27,6 +27,8 @@
         .coin-input::-webkit-inner-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
         .coin-input { -moz-appearance: textfield; appearance: textfield; }
     </style>
+    <link rel="manifest" href="/cubeventory/manifest.json">
+    <meta name="theme-color" content="#0f172a">
 </head>
 <body>
     <div id="root"></div>
@@ -233,7 +235,6 @@
             const [cameraStatus,       setCameraStatus]       = useState('loading'); // 'loading'|'active'|'unavailable'
             const [receiveTextInput,   setReceiveTextInput]   = useState('');
             const [copiedCode,         setCopiedCode]         = useState(false);
-            const [scanLog,            setScanLog]            = useState([]);
             const [placementMode, setPlacementMode] = useState(null);
             const [libraryCollapsed, setLibraryCollapsed] = useState(true);
             const [librarySearch, setLibrarySearch] = useState('');
@@ -2001,10 +2002,8 @@
             // Camera scan loop — runs while the Receive modal is open
             useEffect(() => {
                 if (!showReceiveModal) {
-                    // Reset state for next open
                     setCameraStatus('loading');
                     setReceiveTextInput('');
-                    setScanLog([]);
                     return;
                 }
                 let active = true;
@@ -2351,24 +2350,6 @@
                 setShowTransferQR(false);
             };
 
-            const downloadQR = () => {
-                const canvas = qrCodeRef.current?.querySelector('canvas');
-                if (!canvas) return;
-                // toBlob → blob URL avoids the "data URL saved as raw text" bug present
-                // in some browsers where a.href = dataUrl writes the URL string, not the bytes
-                canvas.toBlob((blob) => {
-                    if (!blob) return;
-                    const blobUrl = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = blobUrl;
-                    a.download = `${characterName || 'transfer'}_qr.png`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-                }, 'image/png');
-            };
-
             // Decodes a raw lz-string transfer code pasted manually by the receiver
             const receiveTransferCode = (text) => {
                 try {
@@ -2382,63 +2363,37 @@
                 return false;
             };
 
-            // Decode a QR code from a still image file (works on any context — no HTTPS needed).
-            // Used by the <input capture="environment"> path on mobile.
+            // Decode a QR code from a still image file.
+            // Reads into an ArrayBuffer first and re-wraps as a Blob to avoid
+            // file-handle permission issues on some Android/file:// configurations.
             const decodeQRFromFile = async (file) => {
-                const log = (msg) => setScanLog(prev => [...prev, msg]);
-
-                log(`File: ${file.name || '(photo)'} — ${(file.size / 1024).toFixed(0)} KB, type: ${file.type || '(none)'}`);
-
-                // Read once up front. On Android file:// pages, calling arrayBuffer() first and then
-                // passing the same File to createImageBitmap/createObjectURL can fail because the
-                // browser treats subsequent reads as a consumed stream. Reading into an ArrayBuffer
-                // and creating a fresh in-memory Blob sidesteps all file-handle restrictions.
                 let blob;
                 try {
                     const buf = await file.arrayBuffer();
-                    const header = Array.from(new Uint8Array(buf.slice(0, 12))).map(b => b.toString(16).padStart(2, '0')).join(' ');
-                    log(`Header bytes: ${header}`);
                     blob = new Blob([buf], { type: file.type || 'image/png' });
-                } catch (e) {
-                    log(`File read error: ${e.message}`);
-                    return;
-                }
+                } catch { return; }
 
                 // Attempt 1: native BarcodeDetector (Chrome/Brave Android 83+, desktop Chrome 88+).
                 if ('BarcodeDetector' in window) {
-                    log('BarcodeDetector: available');
                     try {
                         const supported = await BarcodeDetector.getSupportedFormats();
-                        log(`Supported formats: ${supported.join(', ')}`);
                         if (supported.includes('qr_code')) {
                             const detector = new BarcodeDetector({ formats: ['qr_code'] });
                             const bitmap = await createImageBitmap(blob);
-                            log(`ImageBitmap: ${bitmap.width}×${bitmap.height}`);
                             const results = await detector.detect(bitmap);
                             bitmap.close();
-                            log(`BarcodeDetector result: ${results.length} barcode(s) found`);
                             for (const r of results) {
-                                log(`  raw value (first 60): ${r.rawValue.slice(0, 60)}`);
                                 if (receiveTransferCode(r.rawValue)) return;
-                                log('  → not a valid Cubeventory transfer code');
                             }
-                        } else {
-                            log('qr_code not in supported formats — skipping');
                         }
-                    } catch (e) {
-                        log(`BarcodeDetector error: ${e?.message || String(e)}`);
-                    }
-                } else {
-                    log('BarcodeDetector: not available');
+                    } catch { /* fall through to jsQR */ }
                 }
 
                 // Attempt 2: jsQR with multi-scale passes.
-                log('Trying jsQR fallback...');
                 const url = URL.createObjectURL(blob);
                 const img = new Image();
                 img.onload = () => {
                     URL.revokeObjectURL(url);
-                    log(`Image decoded: ${img.width}×${img.height} px`);
                     const tryDecode = (maxDim) => {
                         let w = img.width, h = img.height;
                         if (w > maxDim || h > maxDim) {
@@ -2451,21 +2406,15 @@
                         ctx.imageSmoothingEnabled = true;
                         ctx.imageSmoothingQuality = 'high';
                         ctx.drawImage(img, 0, 0, w, h);
-                        const result = jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'attemptBoth' });
-                        log(`  jsQR @ ${w}×${h}: ${result ? 'FOUND' : 'not found'}`);
-                        return result;
+                        return jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'attemptBoth' });
                     };
                     for (const dim of [800, 1200, 500, 1600]) {
                         const code = tryDecode(dim);
-                        if (code) {
-                            log(`  raw value (first 60): ${code.data.slice(0, 60)}`);
-                            if (receiveTransferCode(code.data)) return;
-                            log('  → not a valid Cubeventory transfer code');
-                        }
+                        if (code && receiveTransferCode(code.data)) return;
                     }
-                    log('All attempts failed.');
+                    alert('No valid Cubeventory QR found — try again with better lighting and the whole QR in frame.');
                 };
-                img.onerror = (e) => { URL.revokeObjectURL(url); log(`Image load error: ${String(e)}`); };
+                img.onerror = () => { URL.revokeObjectURL(url); };
                 img.src = url;
             };
 
@@ -3703,11 +3652,6 @@
                             JSON.stringify({ type: 'cubeventory_transfer', version: 1, items: transferQueue.map(q => q.item) })
                         );
                         const shareCode = async () => {
-                            if (navigator.share) {
-                                try { await navigator.share({ title: 'Cubeventory Transfer', text: rawCode }); } catch { /* dismissed */ }
-                                return;
-                            }
-                            // Clipboard fallback for desktop
                             try { await navigator.clipboard.writeText(rawCode); } catch {
                                 const el = document.createElement('textarea');
                                 el.value = rawCode; document.body.appendChild(el); el.select();
@@ -3721,27 +3665,26 @@
                             <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[2100]">
                                 <div className="bg-white rounded-xl p-5 max-w-xs w-full mx-4 text-center">
                                     <h3 className="font-bold text-lg mb-1">Transfer QR Code</h3>
-                                    <p className="text-sm text-gray-500 mb-2">Scan to receive, or share the code directly.</p>
+                                    <p className="text-sm text-gray-500 mb-2">Scan to receive, or use the code below as a fallback.</p>
                                     <div className="flex justify-center mb-2">
                                         <div ref={qrCodeRef} className="inline-block" />
                                     </div>
-                                    <p className="text-xs text-gray-400 mb-1">{transferQueue.length} item{transferQueue.length !== 1 ? 's' : ''} · {qrBudgetBytes} / {QR_MAX_CHARS} chars</p>
-                                    <button onClick={downloadQR}
-                                        className="text-xs text-blue-500 hover:text-blue-700 underline mb-3">
-                                        Download QR as Image
-                                    </button>
+                                    <p className="text-xs text-gray-400 mb-3">{transferQueue.length} item{transferQueue.length !== 1 ? 's' : ''} · {qrBudgetBytes} / {QR_MAX_CHARS} chars</p>
 
-                                    {/* Share / Copy — primary path on mobile where live scan needs HTTPS */}
-                                    <div className="border-t border-gray-100 pt-3 mb-3">
-                                        <button onClick={shareCode}
-                                            className={`w-full py-2.5 rounded-lg text-sm font-semibold mb-2 transition-colors ${copiedCode ? 'bg-teal-500 text-white' : 'bg-blue-500 text-white hover:bg-blue-600'}`}>
-                                            {navigator.share ? 'Share Transfer Code' : (copiedCode ? 'Copied!' : 'Copy Transfer Code')}
-                                        </button>
-                                        <textarea readOnly value={rawCode}
-                                            className="w-full text-xs border rounded p-1.5 font-mono resize-none h-14 bg-gray-50 text-left"
-                                            onClick={e => e.target.select()} />
+                                    {/* Text code — fallback if QR scan isn't available */}
+                                    <details className="text-left mb-4">
+                                        <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-600 select-none">Can't scan? Use transfer code instead</summary>
+                                        <div className="mt-2 flex gap-1.5 items-start">
+                                            <textarea readOnly value={rawCode}
+                                                className="flex-1 text-xs border rounded p-1.5 font-mono resize-none h-14 bg-gray-50"
+                                                onClick={e => e.target.select()} />
+                                            <button onClick={shareCode}
+                                                className={`flex-shrink-0 px-3 py-1 rounded text-xs font-medium border transition-colors ${copiedCode ? 'bg-teal-500 text-white border-teal-500' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}>
+                                                {copiedCode ? 'Copied!' : 'Copy'}
+                                            </button>
+                                        </div>
                                         <p className="text-xs text-gray-400 mt-1">Receiver pastes this in the Receive Items box.</p>
-                                    </div>
+                                    </details>
 
                                     <div className="flex gap-2">
                                         <button onClick={cancelTransfer} className="flex-1 border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm hover:bg-gray-50">
@@ -3807,11 +3750,11 @@
                                 </div>
                                 {/* Take Photo — `capture="environment"` opens the rear camera directly on mobile */}
                                 <input ref={cameraInputRef} type="file" accept="image/*" capture="environment"
-                                    onChange={(e) => { setScanLog([]); if (e.target.files[0]) decodeQRFromFile(e.target.files[0]); e.target.value = ''; }}
+                                    onChange={(e) => { if (e.target.files[0]) decodeQRFromFile(e.target.files[0]); e.target.value = ''; }}
                                     className="hidden" />
                                 {/* Load from File — no capture attribute, so opens gallery/file picker */}
                                 <input ref={galleryInputRef} type="file" accept="image/*"
-                                    onChange={(e) => { setScanLog([]); if (e.target.files[0]) decodeQRFromFile(e.target.files[0]); e.target.value = ''; }}
+                                    onChange={(e) => { if (e.target.files[0]) decodeQRFromFile(e.target.files[0]); e.target.value = ''; }}
                                     className="hidden" />
 
                                 <div className="flex items-center gap-2 mb-3">
@@ -3833,18 +3776,6 @@
                                     Receive from Pasted Code
                                 </button>
 
-                                {/* Scan log — shown after a photo scan attempt */}
-                                {scanLog.length > 0 && (
-                                    <div className="mt-4">
-                                        <p className="text-xs font-semibold text-gray-500 mb-1">Scan Log — tap text to select all, then copy</p>
-                                        <textarea readOnly
-                                            value={scanLog.join('\n')}
-                                            onClick={e => e.target.select()}
-                                            className="w-full bg-gray-900 rounded p-2 text-xs font-mono text-green-400 max-h-40 overflow-y-auto resize-none"
-                                            rows={Math.min(scanLog.length + 1, 8)}
-                                        />
-                                    </div>
-                                )}
                             </div>
                         </div>
                     )}
@@ -3939,6 +3870,11 @@
             );
         }
         ReactDOM.createRoot(document.getElementById('root')).render(<CubeventoryTracker />);
+    </script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/cubeventory/sw.js');
+        }
     </script>
 </body>
 </html>
