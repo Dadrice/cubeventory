@@ -2564,13 +2564,23 @@
                     });
                     wireConn(conn);
                 });
+                peer.on('disconnected', () => {
+                    // Signaling server WebSocket dropped (e.g. Android sleep) — reconnect in-place
+                    if (peerRef.current === peer) try { peer.reconnect(); } catch {}
+                });
                 peer.on('error', err => {
                     if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
-                    if (err.type === 'unavailable-id' && autoReconnectRef.current) {
-                        scheduleReconnect(); // PeerJS hasn't released the old ID yet — retry
+                    if (autoReconnectRef.current) {
+                        scheduleReconnect(); // any error during reconnect loop — just retry
+                    } else if (sessionRoleRef.current === 'host') {
+                        // Lost signaling connection after being established — re-establish as host
+                        connMapRef.current.clear();
+                        sessionRoleRef.current = null;
+                        updateSessionPeers([]);
+                        autoReconnectRef.current = { code, role: 'host', attempts: 0 };
+                        scheduleReconnect();
                     } else {
                         setSessionStatus(err.type === 'unavailable-id' ? 'code-taken' : 'error');
-                        autoReconnectRef.current = null;
                         leaveSession();
                     }
                 });
@@ -2583,6 +2593,13 @@
                 setSessionStatus('connecting');
                 const peer = new Peer({ debug: 0 });
                 peerRef.current = peer;
+                // Bail out if PeerJS can't reach the signaling server within 15 s
+                const openTimeout = setTimeout(() => {
+                    if (peerRef.current !== peer) return;
+                    peer.destroy(); peerRef.current = null;
+                    if (autoReconnectRef.current) scheduleReconnect();
+                    else setSessionStatus('error');
+                }, 15000);
                 // Accept incoming connections from other guests (mesh)
                 peer.on('connection', inConn => {
                     if (connMapRef.current.has(inConn.peer)) return;
@@ -2592,6 +2609,7 @@
                     wireConn(inConn);
                 });
                 peer.on('open', () => {
+                    clearTimeout(openTimeout);
                     const conn = peer.connect(trimmed, { reliable: true });
                     connMapRef.current.set(trimmed, conn);
                     updateSessionPeers([{ id: trimmed, name: '…' }]);
@@ -2605,12 +2623,12 @@
                     wireConn(conn);
                 });
                 peer.on('error', err => {
+                    clearTimeout(openTimeout);
                     if (peerRef.current) { try { peerRef.current.destroy(); } catch {} peerRef.current = null; }
-                    if (err.type === 'peer-unavailable' && autoReconnectRef.current) {
-                        scheduleReconnect(); // host not back yet — retry
+                    if (autoReconnectRef.current) {
+                        scheduleReconnect(); // any error during reconnect loop — just retry
                     } else {
                         setSessionStatus(err.type === 'peer-unavailable' ? 'not-found' : 'error');
-                        autoReconnectRef.current = null;
                         leaveSession();
                     }
                 });
