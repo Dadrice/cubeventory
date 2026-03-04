@@ -28,12 +28,12 @@
         .coin-input::-webkit-inner-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
         .coin-input { -moz-appearance: textfield; appearance: textfield; }
 
-        /* Magical item shimmer — purple inset glow that pulses slowly */
+        /* Magical item shimmer — follows the item outline via drop-shadow filter */
         @keyframes magic-pulse {
-            0%, 100% { box-shadow: inset 0 0 3px 1px rgba(168, 85, 247, 0.45); }
-            50%       { box-shadow: inset 0 0 7px 2px rgba(168, 85, 247, 0.85); }
+            0%, 100% { filter: drop-shadow(0 0 3px var(--mc, #a855f7)); }
+            50%       { filter: drop-shadow(0 0 8px var(--mc, #a855f7)) drop-shadow(0 0 4px var(--mc, #a855f7)); }
         }
-        .magical-cell { animation: magic-pulse 2s ease-in-out infinite; }
+        .magical-glow { animation: magic-pulse 2s ease-in-out infinite; }
     </style>
     <link rel="manifest" href="/cubeventory/manifest.json">
     <meta name="theme-color" content="#3b82f6">
@@ -54,15 +54,17 @@
         const Trash2 = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>;
         const FlipHorizontal = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/><path d="M12 20v2"/><path d="M12 14v2"/><path d="M12 8v2"/><path d="M12 2v2"/></svg>;
         const ArrowDownToLine = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="3" x2="12" y2="15"/><polyline points="8 11 12 15 16 11"/><line x1="4" y1="20" x2="20" y2="20"/></svg>;
+        const NoteEdit = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+        const AttuneIcon = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>;
 
         // Returns the Tailwind border classes for a single sub-cell's selection outline.
         // A border edge is drawn only where the adjacent cell is NOT part of the shape.
         const getSelectionBorders = (shape, r, c) => {
             const neighbors = [
-                { dr: -1, dc: 0, cls: 'border-t-4 border-lime-500' },
-                { dr:  1, dc: 0, cls: 'border-b-4 border-lime-500' },
-                { dr:  0, dc:-1, cls: 'border-l-4 border-lime-500' },
-                { dr:  0, dc: 1, cls: 'border-r-4 border-lime-500' },
+                { dr: -1, dc: 0, cls: 'border-t-4' },
+                { dr:  1, dc: 0, cls: 'border-b-4' },
+                { dr:  0, dc:-1, cls: 'border-l-4' },
+                { dr:  0, dc: 1, cls: 'border-r-4' },
             ];
             return neighbors
                 .filter(({ dr, dc }) => !shape.some(s => {
@@ -70,6 +72,57 @@
                     return sr === r + dr && sc === c + dc;
                 }))
                 .map(n => n.cls);
+        };
+
+        // Computes a darker shade of a hex color (#rrggbb) for item cell borders.
+        const darkenColor = (hex, factor = 0.65) => {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgb(${Math.round(r * factor)}, ${Math.round(g * factor)}, ${Math.round(b * factor)})`;
+        };
+
+        // Returns inline border style for each exposed edge of an item cell.
+        // box-sizing: border-box keeps the div dimensions stable.
+        const getItemBorderStyle = (shape, r, c, borderColor) => {
+            const has = (dr, dc) => shape.some(s => {
+                const [sr, sc] = s.split(',').map(Number);
+                return sr === r + dr && sc === c + dc;
+            });
+            return {
+                boxSizing: 'border-box',
+                borderStyle: 'solid',
+                borderColor,
+                borderTopWidth:    has(-1,  0) ? 0 : 1,
+                borderBottomWidth: has( 1,  0) ? 0 : 1,
+                borderLeftWidth:   has( 0, -1) ? 0 : 1,
+                borderRightWidth:  has( 0,  1) ? 0 : 1,
+            };
+        };
+
+        // Renders 4×4 px filled squares at each concave (interior) corner of the selection outline,
+        // closing the gap that CSS border rendering leaves where two perpendicular borders almost meet.
+        // rowPxOffset / colPxOffset are added for contexts where the parent is fixed-positioned (drag preview).
+        const renderConcaveCornerFillers = (shape, position, sub, color, zIdx, keyPrefix, rowPxOffset = 0, colPxOffset = 0) => {
+            const shapeSet = new Set(shape);
+            const bw = 4; // matches border-t-4 / border-r-4 width in pixels
+            const fillers = [];
+            shape.forEach((cell, cellIdx) => {
+                const [r, c] = cell.split(',').map(Number);
+                for (const [dr, dc] of [[-1,-1],[-1,1],[1,-1],[1,1]]) {
+                    if (!shapeSet.has(`${r+dr},${c}`) || !shapeSet.has(`${r},${c+dc}`) || shapeSet.has(`${r+dr},${c+dc}`)) continue;
+                    const topPx  = rowPxOffset + (position.row + r + (dr > 0 ? 1 : 0)) * sub - (dr > 0 ? bw : 0);
+                    const leftPx = colPxOffset + (position.col + c + (dc > 0 ? 1 : 0)) * sub - (dc > 0 ? bw : 0);
+                    fillers.push(
+                        <div
+                            key={`${keyPrefix}-corner-${cellIdx}-${dr}-${dc}`}
+                            className="absolute pointer-events-none"
+                            style={{ top: topPx, left: leftPx, width: bw, height: bw, backgroundColor: color, zIndex: zIdx }}
+                        />
+                    );
+                }
+            });
+            return fillers;
         };
 
         // Renders the item name/quantity text overlay at pre-computed absolute pixel positions.
@@ -106,6 +159,16 @@
                         </div>
                     );
                 }
+            }
+            if (textDisplay.positionHint.type === 'rotated') {
+                const { cx, cy, len, angle } = textDisplay.positionHint;
+                return (
+                    <div style={wrapStyle}>
+                        <div style={{ ...innerCommon, position: 'absolute', top: cy, left: cx, width: len * subCellSz, transform: `translate(-50%, -50%) rotate(${angle}deg)`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', ...textDisplay.style }}>
+                            {displayLines.map((text, idx) => <div key={idx} style={{ textAlign: 'center', pointerEvents: 'none' }}>{text}</div>)}
+                        </div>
+                    </div>
+                );
             }
             // Center fallback
             return (
@@ -155,6 +218,15 @@
                 }
                 return saved?.strength || 10;
             });
+            const [characterClass, setCharacterClass] = useState(() => {
+                const saved = loadAutoSave();
+                if (saved?.characters?.length > 0) {
+                    const aid = saved.activeCharacterId || saved.characters[0].id;
+                    const ac = saved.characters.find(c => c.id === aid) || saved.characters[0];
+                    return ac.characterClass || '';
+                }
+                return '';
+            });
             const [cellSize,      setCellSize]      = useState(40);
             const [items,         setItems]         = useState(() => { const s = loadAutoSave(); return s?.libraryItems || s?.items || []; });
             const [placedItems,   setPlacedItems]   = useState(() => {
@@ -189,6 +261,10 @@
             const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 });
             const [draggedSlotPosition, setDraggedSlotPosition] = useState({ row: 0, col: 0 }); // position for ghost rendering of slot-dragged items
             const [discardTarget,   setDiscardTarget]   = useState(null); // {id, name} while discard confirmation is open
+            const [recycleBin,      setRecycleBin]      = useState(() => { try { return JSON.parse(localStorage.getItem('cubeventory_recycle') || '[]'); } catch { return []; } });
+            const [showRecycleBin,  setShowRecycleBin]  = useState(false);
+            const [editingNotes,    setEditingNotes]    = useState(false);
+            const [editingNotesValue, setEditingNotesValue] = useState('');
             const [libDeleteId,    setLibDeleteId]    = useState(null);
             const [isPainting, setIsPainting] = useState(false);
             const [paintMode, setPaintMode] = useState(null); // 'add' or 'remove'
@@ -243,6 +319,8 @@
             });
             const [showStartup,      setShowStartup]      = useState(() => !loadAutoSave());
             const [showBackups,      setShowBackups]      = useState(false);
+            const [selectionColor,   setSelectionColor]   = useState(() => localStorage.getItem('cubeventory_sel_color') || '#84cc16');
+            const [newItemMagicalColor, setNewItemMagicalColor] = useState('#a855f7');
             const [deleteConfirmStep, setDeleteConfirmStep] = useState(0); // 0=closed, 1=first confirm, 2=second confirm
             const [deletedChars,     setDeletedChars]     = useState([]);
             const [showDeleteUndo,   setShowDeleteUndo]   = useState(false);
@@ -271,6 +349,16 @@
             const [librarySearch, setLibrarySearch] = useState('');
             const [librarySortKey, setLibrarySortKey] = useState('name-asc'); // 'name-asc'|'name-desc'|'weight-asc'|'weight-desc'
             const [libraryCategoryFilter, setLibraryCategoryFilter] = useState('all'); // 'all'|'armor'|'weapon'|'supply'|'container'|'potion'
+            const [libraryMaxRows,       setLibraryMaxRows]       = useState(10);
+
+            const [newItemItemWeight,           setNewItemItemWeight]           = useState('');
+            const [newItemCapacityPerUnit,      setNewItemCapacityPerUnit]      = useState('');
+            const [newItemRequiresAttunement,   setNewItemRequiresAttunement]   = useState(false);
+            const [newItemAttunementClasses,    setNewItemAttunementClasses]    = useState([]);
+
+            const [showAttunements,  setShowAttunements]  = useState(false);
+            const [attuneConfirm,    setAttuneConfirm]    = useState(null); // { itemId, currentHolder, name }
+            const [attuneAckFailed,  setAttuneAckFailed]  = useState(false);
 
             const [overlayPosition, setOverlayPosition] = useState(null);
             const [isDraggingOverlay, setIsDraggingOverlay] = useState(false);
@@ -278,6 +366,8 @@
 
             const dragOffsetRef = useRef({ x: 0, y: 0 });
             const draggedFromInternalRef = useRef(false);
+            const pendingAttuneAcksRef = useRef(new Map()); // requestId → timer handle
+            const itemWasSelectedRef = useRef(false);   // true if the item was already selected when pointerdown fired
             const draggedFromSlotRef = useRef(-1);       // slot index if drag started from an attachment slot, else -1
             const draggedSlotItemRef = useRef(null);     // the item data while being dragged from a slot
 
@@ -286,10 +376,12 @@
             const SUB_DIVISIONS = 2;
             const SUB_CELLS = SUB_DIVISIONS ** 2;
             const COINS_PER_LB = 50;
-            const COINPURSE_POUCH_CAP = 6;   // lbs of coins before a new pouch is needed
+            const COINPURSE_POUCH_CAP = 5;   // lbs of coins before a new pouch is needed
             const COINPURSE_MAX_POUCHES = 5;  // maximum pouches (= max 5 cells wide)
             const GRID_SUB_ROWS = strength * SUB_DIVISIONS;
             const GRID_SUB_COLS = COLS * SUB_DIVISIONS;
+            const CLASSES = ['Artificer','Barbarian','Bard','Cleric','Druid','Fighter','Monk','Paladin','Ranger','Rogue','Sorcerer','Warlock','Wizard'];
+
             const ITEM_TYPES = {
                 armor: { name: 'Armor', color: '#4B5563' },
                 weapon: { name: 'Weapon', color: '#9CA3AF' },
@@ -406,12 +498,20 @@
                   contentsWeight = fillW;
                   maxUnits = units;
 
-                } else { // coinpurse
+                } else if (containerType === 'coinpurse') {
                   const baseW = parseFloat(newItemBaseWeight);
                   if (!newItemName || isNaN(baseW) || baseW <= 0) return;
                   weight = baseW;
                   emptyWeight = baseW;
                   // columnCap and maxColumns validated below when building the item
+                } else if (containerType === 'stacked') {
+                  const baseW = parseFloat(newItemBaseWeight);
+                  const itmW  = parseFloat(newItemItemWeight);
+                  const cap   = parseInt(newItemCapacityPerUnit);
+                  if (!newItemName || isNaN(baseW) || isNaN(itmW) || isNaN(cap)
+                      || baseW <= 0 || itmW <= 0 || cap < 1) return;
+                  weight = baseW;
+                  emptyWeight = baseW;
                 }
               } else {
                 weight = parseFloat(newItemWeight);
@@ -440,17 +540,22 @@
                 emptyWeight,
                 contentsWeight,
                 maxUnits,
-                currentUnits: containerType === 'quantity' ? maxUnits : null,
-                currentWeight: containerType === 'grid' ? emptyWeight : weight,
-                scaleDirection: containerType === 'quantity' ? newItemScaleDirection : null,
+                currentUnits: containerType === 'stacked' ? 0 : (containerType === 'quantity' ? maxUnits : null),
+                currentWeight: containerType === 'grid' ? emptyWeight : (containerType === 'stacked' ? emptyWeight : weight),
+                scaleDirection: (containerType === 'quantity' || containerType === 'stacked') ? newItemScaleDirection : null,
                 internalCapacity,
                 internalGrid: containerType === 'grid' ? [] : undefined,
                 externalSlots: containerType === 'grid' ? externalSlots : undefined,
                 coins: containerType === 'coinpurse' ? { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 } : undefined,
                 columnCap: containerType === 'coinpurse' ? (parseFloat(newItemColumnCap) || COINPURSE_POUCH_CAP) : undefined,
                 maxColumns: containerType === 'coinpurse' ? (parseInt(newItemMaxColumns) || COINPURSE_MAX_POUCHES) : undefined,
+                capacityPerUnit: containerType === 'stacked' ? parseInt(newItemCapacityPerUnit) : undefined,
+                itemWeight:      containerType === 'stacked' ? parseFloat(newItemItemWeight)    : undefined,
                 notes: newItemNotes.trim() || undefined,
                 magical: newItemMagical || undefined,
+                magicalColor: newItemMagical ? newItemMagicalColor : undefined,
+                requiresAttunement: newItemMagical && newItemRequiresAttunement ? true : undefined,
+                attunementClasses: newItemMagical && newItemRequiresAttunement && newItemAttunementClasses.length > 0 ? newItemAttunementClasses : undefined,
               };
 
               if (editingItemId) {
@@ -480,7 +585,12 @@
                 setNewItemExternalSlotWeight('10');
                 setNewItemNotes('');
                 setNewItemMagical(false);
+                setNewItemMagicalColor('#a855f7');
+                setNewItemRequiresAttunement(false);
+                setNewItemAttunementClasses([]);
                 setEditingItemId(null);
+                setNewItemItemWeight('');
+                setNewItemCapacityPerUnit('');
             };
 
             const startEditItem = (item) => {
@@ -490,6 +600,9 @@
                 setNewItemShape([...item.shape]);
                 setNewItemNotes(item.notes || '');
                 setNewItemMagical(item.magical || false);
+                setNewItemMagicalColor(item.magicalColor || '#a855f7');
+                setNewItemRequiresAttunement(item.requiresAttunement || false);
+                setNewItemAttunementClasses(item.attunementClasses || []);
                 if (item.type === 'potion') setNewItemColor(item.color);
                 if (item.containerType === 'grid') {
                     setNewItemContainerSubtype('grid');
@@ -508,6 +621,12 @@
                     setNewItemBaseWeight(String(item.emptyWeight));
                     setNewItemColumnCap(String(item.columnCap || ''));
                     setNewItemMaxColumns(String(item.maxColumns || ''));
+                } else if (item.containerType === 'stacked') {
+                    setNewItemContainerSubtype('stacked');
+                    setNewItemBaseWeight(String(item.emptyWeight));
+                    setNewItemItemWeight(String(item.itemWeight));
+                    setNewItemCapacityPerUnit(String(item.capacityPerUnit));
+                    setNewItemScaleDirection(item.scaleDirection || 'horizontal');
                 } else {
                     setNewItemWeight(String(item.weight));
                 }
@@ -533,7 +652,7 @@
               return container.internalGrid.reduce((sum, item) => sum + (item.currentWeight || item.weight), 0);
             };
 
-            const getScaledContainerShape = (item) => {
+            const getScaledContainerShape = (item, gridContext = null) => {
               if (item.containerType === null) return item.shape;
 
               let currentWeight;
@@ -567,6 +686,39 @@
                   }
                 }
                 return shape; // normalized 0-based; bypasses generic expand/trim
+              } else if (item.containerType === 'stacked') {
+                const sbounds   = getShapeBounds(item.shape);
+                const bHeight   = sbounds.maxRow - sbounds.minRow + 1;  // base shape height in sub-rows
+                const bWidth    = sbounds.maxCol - sbounds.minCol + 1;  // base shape width in sub-cols
+                const cap       = item.capacityPerUnit || 1;
+                const qty       = item.currentUnits || 0;
+                const numBoxes  = Math.max(1, Math.ceil(qty / cap));
+                const lastItems = qty === 0 ? 0 : (qty % cap === 0 ? cap : qty % cap);
+                const stackedShape = [];
+                if ((item.scaleDirection || 'horizontal') === 'horizontal') {
+                  // H-fill: items grow rightward within a box row; new box rows stack downward
+                  const itemSubCols    = Math.ceil(item.itemWeight * SUB_CELLS / bHeight);
+                  const fullBoxSubCols = bWidth + cap * itemSubCols;
+                  const lastBoxSubCols = bWidth + lastItems * itemSubCols;
+                  for (let b = 0; b < numBoxes; b++) {
+                    const rowSubCols = b < numBoxes - 1 ? fullBoxSubCols : lastBoxSubCols;
+                    for (let r = 0; r < bHeight; r++)
+                      for (let sc = 0; sc < rowSubCols; sc++)
+                        stackedShape.push(`${b * bHeight + r},${sc}`);
+                  }
+                } else {
+                  // V-fill: items grow downward within a box column; new box columns stack rightward
+                  const itemSubRows    = Math.ceil(item.itemWeight * SUB_CELLS / bWidth);
+                  const fullBoxSubRows = bHeight + cap * itemSubRows;
+                  const lastBoxSubRows = bHeight + lastItems * itemSubRows;
+                  for (let b = 0; b < numBoxes; b++) {
+                    const colSubRows = b < numBoxes - 1 ? fullBoxSubRows : lastBoxSubRows;
+                    for (let r = 0; r < colSubRows; r++)
+                      for (let sc = 0; sc < bWidth; sc++)
+                        stackedShape.push(`${r},${b * bWidth + sc}`);
+                  }
+                }
+                return stackedShape; // early return, bypasses generic expand/trim
               } else {
                 // quantity
                 const unitWeight = item.contentsWeight / item.maxUnits;
@@ -718,7 +870,10 @@
               const col = Math.round((clientX - gridRect.left - dragOffset.x) / subCellSize);
               const isOutOfBounds = row + bounds.minRow < 0 || row + bounds.maxRow >= subRows ||
                                     col + bounds.minCol < 0 || col + bounds.maxCol >= subCols;
-              return { row, col, isOutOfBounds };
+              // True only when the shape has zero overlap with the grid (entirely across a boundary)
+              const isEntirelyOutOfBounds = row + bounds.maxRow < 0 || row + bounds.minRow >= subRows ||
+                                            col + bounds.maxCol < 0 || col + bounds.minCol >= subCols;
+              return { row, col, isOutOfBounds, isEntirelyOutOfBounds };
             };
 
             const getInternalDimensions = (container) => {
@@ -885,15 +1040,46 @@
                 }));
             };
 
+            const adjustStackedQuantity = (itemId, delta) => {
+                const applyUpdate = (item, maxRows, maxCols) => {
+                    if (item.id !== itemId || item.containerType !== 'stacked') return item;
+                    const newQty    = Math.max(0, item.currentUnits + delta);
+                    const cap       = item.capacityPerUnit || 1;
+                    const numUnits  = Math.max(1, Math.ceil(newQty / cap));
+                    const newWeight = numUnits * item.emptyWeight + newQty * item.itemWeight;
+                    const updated   = { ...item, currentUnits: newQty, currentWeight: newWeight };
+                    const newShape  = getScaledContainerShape(updated);
+                    const newBounds = getShapeBounds(newShape);
+                    let { row: newRow, col: newCol } = item.position;
+                    if (newRow + newBounds.minRow < 0)          newRow = -newBounds.minRow;
+                    if (newRow + newBounds.maxRow >= maxRows)   newRow = maxRows - 1 - (newBounds.maxRow - newBounds.minRow);
+                    if (newCol + newBounds.minCol < 0)          newCol = -newBounds.minCol;
+                    if (newCol + newBounds.maxCol >= maxCols)   newCol = maxCols - 1 - (newBounds.maxCol - newBounds.minCol);
+                    return { ...updated, position: { row: newRow, col: newCol } };
+                };
+
+                if (openContainerId) {
+                    const container = placedItems.find(c => c.id === openContainerId);
+                    if (container?.internalGrid.find(i => i.id === itemId && i.containerType === 'stacked')) {
+                        const dims = getInternalDimensions(container);
+                        setPlacedItems(prev => prev.map(c =>
+                            c.id !== openContainerId ? c : { ...c, internalGrid: c.internalGrid.map(i => applyUpdate(i, dims.subRows, dims.subCols)) }
+                        ));
+                        return;
+                    }
+                }
+                setPlacedItems(prev => prev.map(i => applyUpdate(i, GRID_SUB_ROWS, GRID_SUB_COLS)));
+            };
+
             const updateCoinpurseCoins = (itemId, coinType, newValue) => {
-                setPlacedItems(prev => prev.map(item => {
+                const applyUpdate = (item, maxRows, maxCols) => {
                     if (item.id !== itemId || item.containerType !== 'coinpurse') return item;
                     const newCoins = { ...item.coins, [coinType]: Math.max(0, newValue) };
                     const totalCoins = Object.values(newCoins).reduce((s, v) => s + v, 0);
                     const coinWeight = totalCoins / COINS_PER_LB;
                     const colCap = item.columnCap || COINPURSE_POUCH_CAP;
-                    const maxCols = item.maxColumns || COINPURSE_MAX_POUCHES;
-                    const numPouches = Math.min(maxCols, Math.max(1, Math.ceil(coinWeight / colCap)));
+                    const purseMaxCols = item.maxColumns || COINPURSE_MAX_POUCHES;
+                    const numPouches = Math.min(purseMaxCols, Math.max(1, Math.ceil(coinWeight / colCap)));
                     const newWeight = item.emptyWeight * numPouches + coinWeight;
                     const updatedItem = { ...item, coins: newCoins, currentWeight: newWeight };
                     const newShape = getScaledContainerShape(updatedItem);
@@ -901,11 +1087,27 @@
                     let newRow = item.position.row;
                     let newCol = item.position.col;
                     if (newRow + newBounds.minRow < 0) newRow = -newBounds.minRow;
-                    if (newRow + newBounds.maxRow >= GRID_SUB_ROWS) newRow = GRID_SUB_ROWS - 1 - (newBounds.maxRow - newBounds.minRow);
+                    if (newRow + newBounds.maxRow >= maxRows) newRow = maxRows - 1 - (newBounds.maxRow - newBounds.minRow);
                     if (newCol + newBounds.minCol < 0) newCol = -newBounds.minCol;
-                    if (newCol + newBounds.maxCol >= GRID_SUB_COLS) newCol = GRID_SUB_COLS - 1 - (newBounds.maxCol - newBounds.minCol);
+                    if (newCol + newBounds.maxCol >= maxCols) newCol = maxCols - 1 - (newBounds.maxCol - newBounds.minCol);
                     return { ...updatedItem, position: { row: newRow, col: newCol } };
+                };
+                setPlacedItems(prev => prev.map(item => {
+                    if (item.internalGrid?.find(i => i.id === itemId)) {
+                        const dims = getInternalDimensions(item);
+                        return { ...item, internalGrid: item.internalGrid.map(i => applyUpdate(i, dims.subRows, dims.subCols)) };
+                    }
+                    return applyUpdate(item, GRID_SUB_ROWS, GRID_SUB_COLS);
                 }));
+            };
+
+            const pushToRecycleBin = (item) => {
+                const entry = { ...item, _recycleId: Date.now() + Math.random() };
+                setRecycleBin(prev => {
+                    const next = [entry, ...prev].slice(0, 10);
+                    try { localStorage.setItem('cubeventory_recycle', JSON.stringify(next)); } catch {}
+                    return next;
+                });
             };
 
             const removeItem = (itemId) => {
@@ -915,6 +1117,7 @@
                     const internalItem = container?.internalGrid.find(i => i.id === itemId);
 
                     if (internalItem) {
+                        pushToRecycleBin(internalItem);
                         setPlacedItems(prev => prev.map(c => {
                             if (c.id === openContainerId) {
                                 const newInternalWeight = calculateInternalWeight(c) - internalItem.weight;
@@ -932,15 +1135,61 @@
                     }
                 }
 
-                // Original main grid logic
+                // Main grid logic
+                const item = placedItems.find(i => i.id === itemId);
+                if (item) pushToRecycleBin(item);
                 setPlacedItems(prev => prev.filter(item => item.id !== itemId));
                 setSelectedItemId(null);
                 setDiscardTarget(null);
             };
 
+            const restoreFromRecycleBin = (recycleId) => {
+                const entry = recycleBin.find(i => i._recycleId === recycleId);
+                if (!entry) return;
+                const { _recycleId, ...itemData } = entry;
+                setSetAsideItems(prev => [...prev, { ...itemData, setAsideId: Date.now() + Math.random() }]);
+                setRecycleBin(prev => {
+                    const next = prev.filter(i => i._recycleId !== recycleId);
+                    try { localStorage.setItem('cubeventory_recycle', JSON.stringify(next)); } catch {}
+                    return next;
+                });
+            };
+
+            const saveItemNotes = (itemId, notes) => {
+                const value = notes.trim() || undefined;
+                setPlacedItems(prev => prev.map(item => {
+                    if (item.id === itemId) return { ...item, notes: value };
+                    if (item.internalGrid?.find(i => i.id === itemId))
+                        return { ...item, internalGrid: item.internalGrid.map(i => i.id === itemId ? { ...i, notes: value } : i) };
+                    return item;
+                }));
+                setEditingNotes(false);
+            };
+
             const setItemDown = (itemId) => {
+                // If the item is inside the open container, take it out
+                if (openContainerId) {
+                    const container = placedItems.find(c => c.id === openContainerId);
+                    const internalItem = container?.internalGrid.find(i => i.id === itemId);
+                    if (internalItem) {
+                        setSetAsideItems(prev => [...prev, { ...internalItem, setAsideId: Date.now() + Math.random() }]);
+                        setPlacedItems(prev => prev.map(c => {
+                            if (c.id !== openContainerId) return c;
+                            const newGrid = c.internalGrid.filter(i => i.id !== itemId);
+                            return {
+                                ...c,
+                                internalGrid: newGrid,
+                                currentWeight: c.emptyWeight + newGrid.reduce((s, i) => s + (i.currentWeight ?? i.weight), 0) + calculateExternalWeight(c)
+                            };
+                        }));
+                        setSelectedItemId(null);
+                        return;
+                    }
+                }
                 const item = placedItems.find(i => i.id === itemId);
                 if (!item) return;
+                if (openContainerId === itemId) { setOpenContainerId(null); setOverlayPosition(null); }
+                if (openCoinpurseId === itemId) { setOpenCoinpurseId(null); }
                 setSetAsideItems(prev => [...prev, { ...item, setAsideId: Date.now() + Math.random() }]);
                 setPlacedItems(prev => prev.filter(i => i.id !== itemId));
                 setSelectedItemId(null);
@@ -1034,6 +1283,7 @@
               // Set refs FIRST
               dragOffsetRef.current = offset;
               draggedFromInternalRef.current = isInternalGrid;
+              itemWasSelectedRef.current = (selectedItemId === item.id);
 
               // Batch state updates
               setSelectedItemId(item.id);
@@ -1072,8 +1322,31 @@
                 }
 
                 // Handle rotation for short drag distances (tap/click)
-                // Only rotate if distance is very small (< 5 pixels) and item is not a container
-                const shouldRotate = item && distance < 5 && !isItemContainer;
+                // Only rotate if distance is very small (< 5 pixels), item is not a container,
+                // and the item was already selected when the interaction began.
+                const shouldRotate = item && distance < 5 && !isItemContainer && itemWasSelectedRef.current;
+
+                // Tapping a selected container opens (or closes) its overlay
+                const shouldOpenContainer = item && distance < 5 && isItemContainer && itemWasSelectedRef.current
+                  && (item.containerType === 'grid' || item.containerType === 'coinpurse');
+                if (shouldOpenContainer) {
+                  if (item.containerType === 'grid') {
+                    setOpenContainerId(openContainerId === item.id ? null : item.id);
+                    setOpenCoinpurseId(null);
+                    setOverlayPosition(null);
+                  } else if (item.containerType === 'coinpurse') {
+                    const inContainer = openContainerId && placedItems.find(c => c.id === openContainerId)?.internalGrid.find(i => i.id === item.id);
+                    setOpenCoinpurseId(openCoinpurseId === item.id ? null : item.id);
+                    if (!inContainer) { setOpenContainerId(null); setOverlayPosition(null); }
+                  }
+                  setDraggedItem(null);
+                  setDragStartPosition(null);
+                  setDragStartClient(null);
+                  setDraggedFromInternal(false);
+                  draggedFromInternalRef.current = false;
+                  setIsPanning(false);
+                  return;
+                }
 
                 if (shouldRotate) {
                   if (draggedFromInternalRef.current && openContainerId) {
@@ -1364,8 +1637,8 @@
                       } else if (!isItemOverInternal && isOverMainGrid) {
                         // Move to main grid — lowest priority, only when not over overlay targets
                         const { row: newRow, col: newCol } = clampPosition(
-                          Math.round((clientY - mainGridRect.top) / subCellSize),
-                          Math.round((clientX - mainGridRect.left) / subCellSize),
+                          Math.round((clientY - mainGridRect.top - dragOffset.y) / subCellSize),
+                          Math.round((clientX - mainGridRect.left - dragOffset.x) / subCellSize),
                           bounds, GRID_SUB_ROWS, GRID_SUB_COLS
                         );
                         setPlacedItems(prev => prev.map(c => c.id === openContainerId ? {
@@ -1484,12 +1757,19 @@
                     const mainGridRect = gridRef.current.getBoundingClientRect();
                     const shape = getScaledContainerShape(item);
                     const bounds = getShapeBounds(shape);
-                    const { row: currentRow, col: currentCol, isOutOfBounds } = resolveDropPosition(
+                    const { row: currentRow, col: currentCol, isOutOfBounds, isEntirelyOutOfBounds } = resolveDropPosition(
                       clientX, clientY, dragOffset, mainGridRect, subCellSize, bounds, GRID_SUB_ROWS, GRID_SUB_COLS
                     );
-                    if (isOutOfBounds) {
+                    if (isEntirelyOutOfBounds) {
+                      // Shape has no overlap with the grid at all — snap back
                       setPlacedItems(prev => prev.map(i =>
                         i.id === draggedItem ? { ...i, position: dragStartPosition } : i
+                      ));
+                    } else if (isOutOfBounds) {
+                      // Shape partially overlaps the grid — clamp to the nearest valid edge position
+                      const { row: clampedRow, col: clampedCol } = clampPosition(currentRow, currentCol, bounds, GRID_SUB_ROWS, GRID_SUB_COLS);
+                      setPlacedItems(prev => prev.map(i =>
+                        i.id === draggedItem ? { ...i, position: { row: clampedRow, col: clampedCol } } : i
                       ));
                     } else {
                       setPlacedItems(prev => prev.map(i =>
@@ -1560,7 +1840,9 @@
               const itemHeightPx = itemHeightSub * subCellSize;
 
               const nameText = item.name;
-              const quantityText = item.containerType === 'quantity' ? `${item.currentUnits}/${item.maxUnits}` : '';
+              const quantityText = item.containerType === 'quantity' ? `${item.currentUnits}/${item.maxUnits}`
+                                 : item.containerType === 'stacked'  ? `${item.currentUnits}`
+                                 : '';
               const texts = [nameText];
               if (quantityText) texts.push(quantityText);
               let displayLines = [...texts];
@@ -1648,19 +1930,44 @@
                 }
               }
 
-              // Decide which longest segment to use (horizontal row or vertical column).
-              // Use the single longest contiguous segment on either axis (allow len==1).
-              let positionHint = { type: 'segment', orientation: 'horizontal', row: bestHoriz.row, start: bestHoriz.start, len: Math.max(1, bestHoriz.len) };
-              if (bestVert.len > bestHoriz.len) {
-                positionHint = { type: 'segment', orientation: 'vertical', col: bestVert.col, start: bestVert.start, len: Math.max(1, bestVert.len) };
+              // Shape centroid (sub-cell coords, relative to bounding box origin)
+              // Used to anchor all rotated text placements at the actual center of mass.
+              const _n = coords.length;
+              const _meanC = _n > 0 ? coords.reduce((s, [, c]) => s + c, 0) / _n : (width / 2);
+              const _meanR = _n > 0 ? coords.reduce((s, [r]) => s + r, 0) / _n : (height / 2);
+
+              // Refine bestHoriz: prefer the row closest to _meanR among rows with a run
+              // at least 75% as long as the absolute best. Prevents text anchoring at an
+              // off-centre row on irregular/blob-shaped items.
+              const horizThreshold = bestHoriz.len * 0.75;
+              let centeredHoriz = { ...bestHoriz };
+              let _bestRowDist = Math.abs(bestHoriz.row - _meanR);
+              for (let r = 0; r < height; r++) {
+                let runStart = null, rowBestLen = 0, rowBestStart = 0;
+                for (let c = 0; c < width; c++) {
+                  if (grid[r][c] === 1) { if (runStart === null) runStart = c; }
+                  else if (runStart !== null) {
+                    const len = c - runStart;
+                    if (len > rowBestLen) { rowBestLen = len; rowBestStart = runStart; }
+                    runStart = null;
+                  }
+                }
+                if (runStart !== null) {
+                  const len = width - runStart;
+                  if (len > rowBestLen) { rowBestLen = len; rowBestStart = runStart; }
+                }
+                if (rowBestLen >= horizThreshold) {
+                  const dist = Math.abs(r - _meanR);
+                  if (dist < _bestRowDist) {
+                    _bestRowDist = dist;
+                    centeredHoriz = { row: r, start: rowBestStart, len: rowBestLen };
+                  }
+                }
               }
 
-              // Find font size and orientation
+              let positionHint = { type: 'center' };
               let fontSize = 0;
               let orientation = 'horizontal';
-
-              // Helpers: compute max font for horizontal (wrap into multiple lines within availHeight)
-              const longestLineLen = Math.max(...texts.map(t => t.length));
 
               const computeMaxFontHorizontal = (availW, availH, maxLines = 2, preferNameFirst = true) => {
                 const charWidthFactor = 0.52; // tighter avg char width relative to font-size
@@ -1705,7 +2012,9 @@
                         }
                       }
                       if (!splitFound) {
-                        // Single word or no valid word-boundary split: attempt character hyphenation
+                        // Only attempt character hyphenation when ≥2 chars fit per line;
+                        // prevents "1-/1" style splits for short text in narrow columns.
+                        if (charsPerLine <= 1) { continue; }
                         const firstPartLen = Math.max(1, charsPerLine - 1);
                         const secondLen = primary.length - firstPartLen;
                         if (secondLen <= charsPerLine) {
@@ -1725,67 +2034,70 @@
                 return { font: 0, lines: [] };
               };
 
-              // Always confine text to a single contiguous segment on the chosen axis.
-              if (positionHint.orientation === 'horizontal') {
-                const segAvailW = positionHint.len * subCellSize - (paddingPx * 2);
-                const segAvailH = cellSize - (paddingPx * 2); // only within a single full cell row
-                const fontHObj = computeMaxFontHorizontal(segAvailW, segAvailH, 2);
-                const fontH = fontHObj.font;
-                const linesH = fontHObj.lines;
-
-                // Vertical candidate using the longest vertical segment (text stays horizontal, no rotation)
-                const segAvailWVert = cellSize - (paddingPx * 2);
-                const segAvailHVert = (bestVert.len || 1) * subCellSize - (paddingPx * 2);
-                const fontVObj = computeMaxFontHorizontal(segAvailWVert, segAvailHVert, 2);
-                const fontV = fontVObj.font;
-                const linesV = fontVObj.lines;
-
-                if (fontH > 0 || fontV > 0) {
-                  if (fontH >= fontV) {
-                    fontSize = fontH;
-                    orientation = 'horizontal';
-                    positionHint = { type: 'segment', orientation: 'horizontal', row: bestHoriz.row, start: bestHoriz.start, len: Math.max(1, bestHoriz.len), render: 'segment' };
-                    if (linesH && linesH.length) displayLines = linesH;
-                  } else {
-                    fontSize = fontV;
-                    orientation = 'vertical';
-                    positionHint = { type: 'segment', orientation: 'vertical', col: bestVert.col, start: bestVert.start, len: Math.max(1, bestVert.len), render: 'segment' };
-                    if (linesV && linesV.length) displayLines = linesV;
-                  }
-                } else {
-                  // Neither orientation can fit text within a single-segment constraint
-                  return { fontSize: 0, texts: [], lines: [], style: {}, positionHint: { type: 'center' } };
+              // Compute font sizes for axis-aligned candidates
+              // horizResult: text horizontal, width = centred row's segment (≥75% of absolute best)
+              const horizResult = computeMaxFontHorizontal((centeredHoriz.len || 1) * subCellSize - paddingPx * 2, cellSize - paddingPx * 2, 2);
+              // vertResult: text horizontal but rendered in a tall column (constrained to 1-cell width)
+              const vertResult  = computeMaxFontHorizontal(cellSize - paddingPx * 2, (bestVert.len || 1) * subCellSize - paddingPx * 2, 2);
+              // vertRotResult: text rotated -90°, using full segment height as the text width.
+              // Only for tall-thin shapes (vertical run clearly longer than horizontal run).
+              // cx snaps to the full-cell column center so text stays within the column width.
+              let vertRotResult = { font: 0, lines: [] };
+              let vertRotHint = null;
+              const useVertRot = bestVert.len > 1 && (bestVert.len > bestHoriz.len * 1.5);
+              if (useVertRot) {
+                vertRotResult = computeMaxFontHorizontal((bestVert.len || 1) * subCellSize - paddingPx * 2, cellSize - paddingPx * 2, 2);
+                if (vertRotResult.font > 0) {
+                  const fullCellColCenter = (Math.floor(bestVert.col / SUB_DIVISIONS) + 0.5) * cellSize;
+                  vertRotHint = { type: 'rotated', cx: fullCellColCenter, cy: (bestVert.start + bestVert.len / 2) * subCellSize, len: bestVert.len, angle: -90 };
                 }
-              } else {
-                // positionHint.orientation === 'vertical' (we picked vertical as the longer segment)
-                // Text stays horizontal within the column, no rotation
-                const segAvailW = cellSize - (paddingPx * 2);
-                const segAvailH = positionHint.len * subCellSize - (paddingPx * 2);
-                const fontVObj = computeMaxFontHorizontal(segAvailW, segAvailH, 2);
-                const fontV = fontVObj.font;
-                const linesV = fontVObj.lines;
+              }
 
-                const segAvailWHor = (bestHoriz.len || 1) * subCellSize - (paddingPx * 2);
-                const segAvailHHor = cellSize - (paddingPx * 2);
-                const fontHObj = computeMaxFontHorizontal(segAvailWHor, segAvailHHor, 2);
-                const fontH = fontHObj.font;
-                const linesH = fontHObj.lines;
-
-                if (fontV > 0 || fontH > 0) {
-                  if (fontH >= fontV) {
-                    fontSize = fontH;
-                    orientation = 'horizontal';
-                    positionHint = { type: 'segment', orientation: 'horizontal', row: bestHoriz.row, start: bestHoriz.start, len: Math.max(1, bestHoriz.len), render: 'segment' };
-                    if (linesH && linesH.length) displayLines = linesH;
-                  } else {
-                    fontSize = fontV;
-                    orientation = 'vertical';
-                    positionHint = { type: 'segment', orientation: 'vertical', col: bestVert.col, start: bestVert.start, len: Math.max(1, bestVert.len), render: 'segment' };
-                    if (linesV && linesV.length) displayLines = linesV;
-                  }
-                } else {
-                  return { fontSize: 0, texts: [], lines: [], style: {}, positionHint: { type: 'center' } };
+              // PCA: find the principal axis of the item shape for diagonal text placement
+              let pcaResult = { font: 0, lines: [] };
+              let pcaHint = null;
+              if (_n >= 3) {
+                let Scc = 0, Srr = 0, Src = 0;
+                for (const [r, c] of coords) {
+                  const dr = r - _meanR, dc = c - _meanC;
+                  Srr += dr * dr; Scc += dc * dc; Src += dr * dc;
                 }
+                Srr /= _n; Scc /= _n; Src /= _n;
+                const theta = Math.atan2(2 * Src, Scc - Srr) / 2;
+                const cosT = Math.cos(theta), sinT = Math.sin(theta);
+                const projs = coords.map(([r, c]) => (c - _meanC) * cosT + (r - _meanR) * sinT);
+                const projMin = Math.min(...projs), projMax = Math.max(...projs);
+                const spanCells = projMax - projMin;
+                // Centre on the midpoint of the projection extent so text sits equidistant
+                // from both diagonal ends, and pull in 1 sub-cell for corner margin.
+                const midProj  = (projMin + projMax) / 2;
+                const safeSpan = Math.max(1, spanCells - 1.0);
+                const thetaDeg = theta * (180 / Math.PI);
+                const absAngle = Math.abs(thetaDeg);
+                if (absAngle > 15 && absAngle < 75 && spanCells > 1.5) {
+                  pcaResult = computeMaxFontHorizontal(safeSpan * subCellSize - paddingPx * 2, cellSize - paddingPx * 2, 2);
+                  if (pcaResult.font > 0) {
+                    pcaHint = { type: 'rotated',
+                      cx: (_meanC + midProj * cosT + 0.5) * subCellSize,
+                      cy: (_meanR + midProj * sinT + 0.5) * subCellSize,
+                      len: safeSpan, angle: thetaDeg };
+                  }
+                }
+              }
+
+              // Pick best candidate: largest font wins; ties favour this order: horiz > vert > vert-rot > pca
+              const _candidates = [
+                { font: horizResult.font,  lines: horizResult.lines,  hint: { type: 'rotated', cx: Math.max(centeredHoriz.len / 2, Math.min(width - centeredHoriz.len / 2, _meanC + 0.5)) * subCellSize, cy: (_meanR + 0.5) * subCellSize, len: centeredHoriz.len, angle: 0 }, orientation: 'horizontal' },
+                { font: vertResult.font,   lines: vertResult.lines,   hint: { type: 'rotated', cx: Math.max(SUB_DIVISIONS / 2, Math.min(width - SUB_DIVISIONS / 2, _meanC + 0.5)) * subCellSize, cy: (_meanR + 0.5) * subCellSize, len: SUB_DIVISIONS, angle: 0 }, orientation: 'vertical' },
+                vertRotHint ? { font: vertRotResult.font, lines: vertRotResult.lines, hint: vertRotHint, orientation: 'horizontal' } : null,
+                pcaHint     ? { font: pcaResult.font,    lines: pcaResult.lines,    hint: pcaHint,     orientation: 'horizontal' } : null,
+              ].filter(Boolean);
+              const _best = _candidates.reduce((best, c) => c.font > best.font ? c : best, { font: 0 });
+              if (_best.font > 0) {
+                fontSize = _best.font;
+                positionHint = _best.hint;
+                orientation = _best.orientation;
+                if (_best.lines.length) displayLines = _best.lines;
               }
 
               if (fontSize < minFontSize) {
@@ -1796,7 +2108,6 @@
                 fontSize: `${fontSize}px`,
                 lineHeight: '1.2',
                 padding: `${paddingPx}px`,
-                wordBreak: 'break-word',
               };
 
               return {
@@ -2014,7 +2325,7 @@
                     }));
                 }, 1500);
                 return () => clearTimeout(autoSaveTimerRef.current);
-            }, [characterName, strength, items, placedItems, setAsideItems, characters, activeCharacterId, showStartup]);
+            }, [characterName, strength, characterClass, items, placedItems, setAsideItems, characters, activeCharacterId, showStartup]);
 
             // Immediate save + backup snapshot when page goes to background (mobile tab-switch / back-swipe)
             useEffect(() => {
@@ -2034,7 +2345,7 @@
                 };
                 document.addEventListener('visibilitychange', onHide);
                 return () => document.removeEventListener('visibilitychange', onHide);
-            }, [characterName, strength, items, placedItems, setAsideItems, characters, activeCharacterId, showStartup]);
+            }, [characterName, strength, characterClass, items, placedItems, setAsideItems, characters, activeCharacterId, showStartup]);
 
             // Reset coin overlay state whenever the coinpurse overlay is closed or switched
             useEffect(() => {
@@ -2044,6 +2355,9 @@
                 setConvertTo(null);
                 setConvertAmount('');
             }, [openCoinpurseId]);
+
+            // Close notes editor when selection changes
+            useEffect(() => { setEditingNotes(false); }, [selectedItemId]);
 
             // Generate QR code into the DOM ref whenever the QR modal opens
             useEffect(() => {
@@ -2181,7 +2495,9 @@
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'Cubeventory_Player_Data.json';
+                const _now = new Date();
+                const _ts = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}_${String(_now.getHours()).padStart(2,'0')}-${String(_now.getMinutes()).padStart(2,'0')}-${String(_now.getSeconds()).padStart(2,'0')}`;
+                a.download = `Cubeventory_Player_Data_${_ts}.json`;
                 a.click();
                 URL.revokeObjectURL(url);
             };
@@ -2257,9 +2573,9 @@
 
             const startFresh = () => {
                 setItems([]);
-                setCharacters([{ id: DEFAULT_CHAR_ID, name: '', strength: 10, placedItems: [], setAsideItems: [] }]);
+                setCharacters([{ id: DEFAULT_CHAR_ID, name: '', strength: 10, characterClass: '', placedItems: [], setAsideItems: [] }]);
                 setActiveCharacterId(DEFAULT_CHAR_ID);
-                setCharacterName(''); setStrength(10);
+                setCharacterName(''); setStrength(10); setCharacterClass('');
                 setPlacedItems([]); setSetAsideItems([]);
                 setShowStartup(false);
             };
@@ -2267,7 +2583,7 @@
             // Returns the characters array with the active character's current state patched in (for saving)
             const getCharactersForSave = () =>
                 characters.map(c => c.id === activeCharacterId
-                    ? { ...c, name: characterName, strength, placedItems, setAsideItems }
+                    ? { ...c, name: characterName, strength, characterClass, placedItems, setAsideItems }
                     : c
                 );
 
@@ -2275,13 +2591,14 @@
                 if (charId === activeCharacterId) return;
                 // Persist current char state into the array before switching
                 setCharacters(prev => prev.map(c => c.id === activeCharacterId
-                    ? { ...c, name: characterName, strength, placedItems, setAsideItems }
+                    ? { ...c, name: characterName, strength, characterClass, placedItems, setAsideItems }
                     : c
                 ));
                 const newChar = characters.find(c => c.id === charId);
                 if (!newChar) return;
                 setCharacterName(newChar.name);
                 setStrength(newChar.strength);
+                setCharacterClass(newChar.characterClass || '');
                 setPlacedItems(newChar.placedItems);
                 setSetAsideItems(newChar.setAsideItems);
                 setActiveCharacterId(charId);
@@ -2293,14 +2610,15 @@
 
             const createNewCharacter = () => {
                 const updatedChars = characters.map(c => c.id === activeCharacterId
-                    ? { ...c, name: characterName, strength, placedItems, setAsideItems }
+                    ? { ...c, name: characterName, strength, characterClass, placedItems, setAsideItems }
                     : c
                 );
                 const newId = `char_${Date.now()}`;
-                const newChar = { id: newId, name: '', strength: 10, placedItems: [], setAsideItems: [] };
+                const newChar = { id: newId, name: '', strength: 10, characterClass: '', placedItems: [], setAsideItems: [] };
                 setCharacters([...updatedChars, newChar]);
                 setCharacterName('');
                 setStrength(10);
+                setCharacterClass('');
                 setPlacedItems([]);
                 setSetAsideItems([]);
                 setActiveCharacterId(newId);
@@ -2468,6 +2786,40 @@
                 connMapRef.current.forEach(conn => { if (conn.open) conn.send(data); });
             };
 
+            const broadcastAttuneUpdate = (itemId, attunedTo) => {
+                if (!sessionRoleRef.current) return;
+                const requestId = `${Date.now()}-${Math.random()}`;
+                const timer = setTimeout(() => {
+                    if (pendingAttuneAcksRef.current.has(requestId)) {
+                        pendingAttuneAcksRef.current.delete(requestId);
+                        setAttuneAckFailed(true);
+                        setTimeout(() => setAttuneAckFailed(false), 6000);
+                    }
+                }, 3000);
+                pendingAttuneAcksRef.current.set(requestId, timer);
+                broadcastSession({ type: 'attune_update', itemId, attunedTo, requestId });
+            };
+
+            const attuneItem = (itemId) => {
+                setPlacedItems(prev => prev.map(item => {
+                    if (item.id === itemId) return { ...item, attunedTo: characterName };
+                    if (item.internalGrid?.find(i => i.id === itemId))
+                        return { ...item, internalGrid: item.internalGrid.map(i => i.id === itemId ? { ...i, attunedTo: characterName } : i) };
+                    return item;
+                }));
+                broadcastAttuneUpdate(itemId, characterName);
+            };
+
+            const unattuneItem = (itemId) => {
+                setPlacedItems(prev => prev.map(item => {
+                    if (item.id === itemId) return { ...item, attunedTo: null };
+                    if (item.internalGrid?.find(i => i.id === itemId))
+                        return { ...item, internalGrid: item.internalGrid.map(i => i.id === itemId ? { ...i, attunedTo: null } : i) };
+                    return item;
+                }));
+                broadcastAttuneUpdate(itemId, null);
+            };
+
             // Handles all incoming data messages from any peer
             const handleSessionMsg = (msg, fromId) => {
                 if (msg.type === 'hello') {
@@ -2510,6 +2862,20 @@
                     sendTo(fromId, { type: 'pong' });
                 } else if (msg.type === 'pong') {
                     lastHostPongRef.current = Date.now(); // host is alive
+                } else if (msg.type === 'attune_update') {
+                    setPlacedItems(prev => prev.map(item => {
+                        if (item.id === msg.itemId) return { ...item, attunedTo: msg.attunedTo };
+                        if (item.internalGrid?.find(i => i.id === msg.itemId))
+                            return { ...item, internalGrid: item.internalGrid.map(i => i.id === msg.itemId ? { ...i, attunedTo: msg.attunedTo } : i) };
+                        return item;
+                    }));
+                    sendTo(fromId, { type: 'attune_ack', requestId: msg.requestId });
+                } else if (msg.type === 'attune_ack') {
+                    const timer = pendingAttuneAcksRef.current.get(msg.requestId);
+                    if (timer !== undefined) {
+                        clearTimeout(timer);
+                        pendingAttuneAcksRef.current.delete(msg.requestId);
+                    }
                 }
             };
 
@@ -2895,6 +3261,14 @@
                                             <input type="number" value={strength} onChange={(e) => setStrength(Math.max(1, Math.min(30, parseInt(e.target.value) || 1)))} className="w-full border rounded px-2 py-1 text-sm" min="1" max="30" />
                                         </div>
                                     </div>
+                                    {/* Class */}
+                                    <div>
+                                        <label className="block text-xs font-medium mb-1">Class</label>
+                                        <select value={characterClass} onChange={(e) => setCharacterClass(e.target.value)} className="w-full border rounded px-2 py-1 text-sm">
+                                            <option value="">— None selected —</option>
+                                            {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
                                     {/* Cell size */}
                                     <div>
                                         <label className="block text-xs font-medium mb-1">Cell Size: {cellSize}px</label>
@@ -2921,6 +3295,10 @@
                                             {sessionStatus === 'reconnecting' && <span className="text-xs">↻</span>}
                                             {sessionStatus === 'reconnect-failed' && <span className="text-xs font-bold">!</span>}
                                         </button>
+                                        <label className="flex items-center gap-1.5 text-sm text-gray-600 flex-shrink-0 cursor-pointer select-none">
+                                            Selection Highlight Color:
+                                            <input type="color" value={selectionColor} onChange={(e) => { setSelectionColor(e.target.value); localStorage.setItem('cubeventory_sel_color', e.target.value); }} className="w-7 h-7 rounded cursor-pointer border border-gray-300 p-0.5" />
+                                        </label>
                                         <input ref={fileInputRef} type="file" accept=".json" onChange={importData} className="hidden" />
                                     </div>
                                 </div>
@@ -2957,10 +3335,37 @@
                               </select>
                               <input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="Item Name" className="w-full mb-2 p-2 border rounded" />
                               <textarea value={newItemNotes} onChange={(e) => setNewItemNotes(e.target.value)} placeholder="Notes (optional)" rows={2} className="w-full mb-2 p-2 border rounded text-sm resize-none" />
-                              <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
-                                <input type="checkbox" checked={newItemMagical} onChange={(e) => setNewItemMagical(e.target.checked)} className="w-4 h-4 accent-purple-500" />
-                                <span className="text-sm text-purple-600 font-medium">✦ Magical item</span>
-                              </label>
+                              <div className="flex items-center gap-2 mb-2">
+                                <label className="flex items-center gap-2 cursor-pointer select-none flex-1">
+                                  <input type="checkbox" checked={newItemMagical} onChange={(e) => setNewItemMagical(e.target.checked)} className="w-4 h-4 accent-purple-500" />
+                                  <span className="text-sm text-purple-600 font-medium">✦ Magical item</span>
+                                </label>
+                                {newItemMagical && (
+                                  <input type="color" value={newItemMagicalColor} onChange={(e) => setNewItemMagicalColor(e.target.value)} title="Glow color" className="w-8 h-8 rounded cursor-pointer border border-gray-300 p-0.5 flex-shrink-0" />
+                                )}
+                              </div>
+                              {newItemMagical && (
+                                <div className="mb-2">
+                                  <label className="flex items-center gap-2 cursor-pointer select-none mb-1">
+                                    <input type="checkbox" checked={newItemRequiresAttunement} onChange={(e) => { setNewItemRequiresAttunement(e.target.checked); if (!e.target.checked) setNewItemAttunementClasses([]); }} className="w-4 h-4 accent-amber-500" />
+                                    <span className="text-sm text-amber-600 font-medium flex items-center gap-1"><AttuneIcon size={14} /> Requires Attunement</span>
+                                  </label>
+                                  {newItemRequiresAttunement && (
+                                    <div>
+                                      <p className="text-xs text-gray-500 mb-1">Class restriction (leave empty for any class):</p>
+                                      <div className="flex flex-wrap gap-1">
+                                        {CLASSES.map(cls => (
+                                          <button key={cls} type="button"
+                                            onClick={() => setNewItemAttunementClasses(prev => prev.includes(cls) ? prev.filter(c => c !== cls) : [...prev, cls])}
+                                            className={`px-2 py-0.5 rounded text-xs border ${newItemAttunementClasses.includes(cls) ? 'bg-amber-400 text-white border-amber-400' : 'bg-white text-gray-600 border-gray-300'}`}>
+                                            {cls}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                               {newItemType === 'potion' && (
                                 <input type="color" value={newItemColor} onChange={(e) => setNewItemColor(e.target.value)} className="w-full mb-2 p-1 border rounded" />
                               )}
@@ -2970,6 +3375,7 @@
                                     <option value="quantity">Quantity Container (quiver, waterskin, etc.)</option>
                                     <option value="grid">Grid Container (backpack, chest, etc.)</option>
                                     <option value="coinpurse">Coin Purse</option>
+                                    <option value="stacked">Stacked Bundle (rations, torches, etc.)</option>
                                   </select>
                                   <input value={newItemBaseWeight} onChange={(e) => setNewItemBaseWeight(e.target.value)} placeholder="Empty Weight (lbs)" type="number" step="0.25" className="w-full mb-2 p-2 border rounded" />
                                   {newItemContainerSubtype === 'grid' ? (
@@ -2987,9 +3393,20 @@
                                         <option value="horizontal">Scale Horizontal</option>
                                       </select>
                                     </div>
+                                  ) : newItemContainerSubtype === 'stacked' ? (
+                                    <div>
+                                      <input value={newItemItemWeight} onChange={(e) => setNewItemItemWeight(e.target.value)}
+                                        placeholder="Weight per item (lbs)" type="number" step="0.25" className="w-full mb-2 p-2 border rounded" />
+                                      <input value={newItemCapacityPerUnit} onChange={(e) => setNewItemCapacityPerUnit(e.target.value)}
+                                        placeholder="Items per unit/box" type="number" min="1" className="w-full mb-2 p-2 border rounded" />
+                                      <select value={newItemScaleDirection} onChange={(e) => setNewItemScaleDirection(e.target.value)} className="w-full mb-2 p-2 border rounded">
+                                        <option value="horizontal">Fill Horizontal (grows right, then down)</option>
+                                        <option value="vertical">Fill Vertical (grows down, then right)</option>
+                                      </select>
+                                    </div>
                                   ) : (
                                     <div>
-                                      <input value={newItemColumnCap} onChange={(e) => setNewItemColumnCap(e.target.value)} placeholder="Lbs of coins per column (default 6)" type="number" step="0.25" min="0.25" className="w-full mb-2 p-2 border rounded" />
+                                      <input value={newItemColumnCap} onChange={(e) => setNewItemColumnCap(e.target.value)} placeholder="Lbs of coins per column (default 5)" type="number" step="0.25" min="0.25" className="w-full mb-2 p-2 border rounded" />
                                       <input value={newItemMaxColumns} onChange={(e) => setNewItemMaxColumns(e.target.value)} placeholder="Max columns / pouches (default 5)" type="number" min="1" className="w-full mb-2 p-2 border rounded" />
                                     </div>
                                   ) /* coinpurse */}
@@ -2997,6 +3414,7 @@
                               ) : (
                                 <input value={newItemWeight} onChange={(e) => setNewItemWeight(e.target.value)} placeholder="Weight (lbs)" type="number" step="0.25" className="w-full mb-2 p-2 border rounded" />
                               )}
+                                <>
                                   <div className="mb-2">
                                     <label className="block text-sm font-medium mb-1">Creation Grid Scale: {(creationGridScale * 100).toFixed(0)}%</label>
                                     <input type="range" min="0.3" max="1" step="0.05" value={creationGridScale} onChange={(e) => setCreationGridScale(parseFloat(e.target.value))} className="w-full" />
@@ -3066,6 +3484,7 @@
                                         </div>
                                     ))}
                                 </div>
+                                </>
                                 <div className="flex gap-2">
                                     <button onClick={saveNewItem} disabled={newItemShape.length !== targetSubCells || !newItemName} className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-300">{editingItemId ? 'Save Changes' : 'Save Item'}</button>
                                     <button onClick={() => { setIsCreatingItem(false); resetItemCreation(); }} className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Cancel</button>
@@ -3149,7 +3568,18 @@
                                             <p className="text-gray-400 text-sm mt-3 text-center">No items match.</p>
                                         );
                                         return (
-                                            <div className="mt-2 flex flex-col gap-1 overflow-y-auto" style={{ maxHeight: '40vh' }}>
+                                          <>
+                                            <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+                                                <span>{filtered.length} item{filtered.length !== 1 ? 's' : ''}</span>
+                                                <label className="flex items-center gap-1 cursor-pointer select-none">
+                                                    Show
+                                                    <select value={libraryMaxRows} onChange={e => setLibraryMaxRows(Number(e.target.value))} className="border rounded px-1 py-0.5 text-xs mx-1">
+                                                        {[5, 10, 15, 20, 30].map(n => <option key={n} value={n}>{n}</option>)}
+                                                    </select>
+                                                    rows
+                                                </label>
+                                            </div>
+                                            <div className="mt-1 flex flex-col gap-1 overflow-y-auto" style={{ maxHeight: `${libraryMaxRows * 50}px` }}>
                                                 {filtered.map(item => (
                                                     <div key={item.id} className="flex items-center gap-2 border rounded px-2 py-1.5">
                                                         <div className="flex-shrink-0 w-3 h-3 rounded-sm" style={{ backgroundColor: item.color }} />
@@ -3164,6 +3594,7 @@
                                                     </div>
                                                 ))}
                                             </div>
+                                          </>
                                         );
                                     })()}
                                   </>
@@ -3183,6 +3614,14 @@
                                     <button onClick={() => setShowReceiveModal(true)}
                                         className="flex items-center gap-1 bg-teal-600 text-white px-3 py-1 rounded text-xs hover:bg-teal-700">
                                         Receive Items
+                                    </button>
+                                    <button onClick={() => setShowAttunements(true)}
+                                        className="flex items-center gap-1 bg-amber-500 text-white px-3 py-1 rounded text-xs hover:bg-amber-600">
+                                        <AttuneIcon size={12} /> Attunements
+                                    </button>
+                                    <button onClick={() => setShowRecycleBin(true)}
+                                        className="flex items-center gap-1 bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600">
+                                        Recycle Bin{recycleBin.length > 0 && <span className="bg-white text-gray-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{recycleBin.length}</span>}
                                     </button>
                                 </div>
                             </div>
@@ -3262,13 +3701,15 @@
                                                               height: subCellSize,
                                                               top: absRow * subCellSize,
                                                               left: absCol * subCellSize,
-                                                              boxShadow: '0 0 8px rgba(132, 204, 22, 0.8)',
+                                                              borderColor: selectionColor,
                                                               zIndex: draggedItem === item.id ? 100 : 2
                                                             }}
                                                           />
                                                         );
                                                       })}
+                                                      {selected && renderConcaveCornerFillers(shape, item.position, subCellSize, selectionColor, draggedItem === item.id ? 100 : 2, `main-${item.id}`)}
 
+                                                      <div className={item.magical ? 'magical-glow' : undefined} style={item.magical ? { '--mc': item.magicalColor || '#a855f7' } : undefined}>
                                                       {shape.map((cell, idx) => {
                                                         const [r, c] = cell.split(',').map(Number);
                                                         const absRow = item.position.row + r;
@@ -3278,7 +3719,7 @@
                                                         return (
                                                           <div
                                                             key={idx}
-                                                            className={`absolute pointer-events-auto cursor-pointer${item.magical && !isOverlapping ? ' magical-cell' : ''}`}
+                                                            className="absolute pointer-events-auto cursor-pointer"
                                                             style={{
                                                               width: subCellSize,
                                                               height: subCellSize,
@@ -3287,7 +3728,8 @@
                                                               backgroundColor: isOverlapping ? '#EF4444' : item.color,
                                                               opacity: isOverlapping ? 1 : 0.8,
                                                               zIndex: draggedItem === item.id ? 100 : 1,
-                                                              touchAction: 'none'
+                                                              touchAction: 'none',
+                                                              ...getItemBorderStyle(shape, r, c, darkenColor(item.color)),
                                                             }}
                                                             onClick={(e) => {
                                                               e.stopPropagation();
@@ -3300,7 +3742,23 @@
                                                           />
                                                         );
                                                       })}
+                                                      </div>
 
+                                                      {item.attunedTo && (() => {
+                                                        const bs = Math.max(8, Math.floor(subCellSize * 0.55));
+                                                        return (
+                                                          <div className="absolute pointer-events-none" style={{
+                                                            top: (item.position.row + bounds.minRow) * subCellSize + 1,
+                                                            left: (item.position.col + bounds.maxCol + 1) * subCellSize - bs - 1,
+                                                            zIndex: draggedItem === item.id ? 101 : 3,
+                                                            color: '#f59e0b',
+                                                            lineHeight: 0,
+                                                            filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.6))'
+                                                          }}>
+                                                            <AttuneIcon size={bs} />
+                                                          </div>
+                                                        );
+                                                      })()}
                                                       {renderTextOverlay(
                                                         textDisplay,
                                                         (item.position.row + bounds.minRow) * subCellSize,
@@ -3422,6 +3880,34 @@
                               className="relative border border-gray-400 inline-block"
                               onClick={(e) => {
                                 e.stopPropagation();
+                                if (placementMode) {
+                                  const internalRect = internalGridRef.current?.getBoundingClientRect();
+                                  if (internalRect) {
+                                    const col = Math.round((e.clientX - internalRect.left) / subCellSize);
+                                    const row = Math.round((e.clientY - internalRect.top) / subCellSize);
+                                    const pmItem = placementMode.item;
+                                    const shape = getScaledContainerShape(pmItem);
+                                    const bounds = getShapeBounds(shape);
+                                    const { subRows: intSubRows, subCols: intSubCols } = getInternalDimensions(container);
+                                    const { row: clampedRow, col: clampedCol } = clampPosition(row, col, bounds, intSubRows, intSubCols);
+                                    const itemWeight = pmItem.currentWeight ?? pmItem.weight;
+                                    if (calculateInternalWeight(container) + itemWeight > container.internalCapacity) {
+                                      alert('Exceeds internal capacity!');
+                                      return;
+                                    }
+                                    const placedItem = { ...pmItem, position: { row: clampedRow, col: clampedCol } };
+                                    setPlacedItems(prev => prev.map(c => {
+                                      if (c.id !== openContainerId) return c;
+                                      const newInternalWeight = calculateInternalWeight(c) + itemWeight;
+                                      return { ...c, internalGrid: [...c.internalGrid, placedItem], currentWeight: c.emptyWeight + newInternalWeight + calculateExternalWeight(c) };
+                                    }));
+                                    if (placementMode.source === 'setAside') {
+                                      setSetAsideItems(prev => prev.filter(i => i.id !== placementMode.setAsideId));
+                                    }
+                                    setPlacementMode(null);
+                                    return;
+                                  }
+                                }
                                 // Only deselect if clicking the background (not an item)
                                 if (e.target === e.currentTarget || e.target.closest('.absolute') === null) {
                                   if (!discardTarget) {
@@ -3476,13 +3962,15 @@
                                             height: subCellSize,
                                             top: absRow * subCellSize,
                                             left: absCol * subCellSize,
-                                            boxShadow: '0 0 8px rgba(132, 204, 22, 0.8)',
+                                            borderColor: selectionColor,
                                             zIndex: 2
                                           }}
                                         />
                                       );
                                     })}
+                                    {selected && renderConcaveCornerFillers(shape, item.position, subCellSize, selectionColor, 2, `int-${item.id}`)}
 
+                                    <div className={item.magical ? 'magical-glow' : undefined} style={item.magical ? { '--mc': item.magicalColor || '#a855f7' } : undefined}>
                                     {shape.map((cell, idx) => {
                                       const [r, c] = cell.split(',').map(Number);
                                       const absRow = item.position.row + r;
@@ -3502,7 +3990,8 @@
                                             backgroundColor: isOverlapping ? '#EF4444' : item.color,
                                             opacity: isOverlapping ? 1 : 0.8,
                                             zIndex: 1,
-                                            touchAction: 'none'
+                                            touchAction: 'none',
+                                            ...getItemBorderStyle(shape, r, c, darkenColor(item.color)),
                                           }}
                                           onPointerDown={(e) => {
                                             e.target.setPointerCapture(e.pointerId);
@@ -3511,7 +4000,23 @@
                                         />
                                       );
                                     })}
+                                    </div>
 
+                                    {item.attunedTo && (() => {
+                                      const bs = Math.max(8, Math.floor(subCellSize * 0.55));
+                                      return (
+                                        <div className="absolute pointer-events-none" style={{
+                                          top: (item.position.row + bounds.minRow) * subCellSize + 1,
+                                          left: (item.position.col + bounds.maxCol + 1) * subCellSize - bs - 1,
+                                          zIndex: 3,
+                                          color: '#f59e0b',
+                                          lineHeight: 0,
+                                          filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.6))'
+                                        }}>
+                                          <AttuneIcon size={bs} />
+                                        </div>
+                                      );
+                                    })()}
                                     {renderTextOverlay(
                                       textDisplay,
                                       (bounds.minRow + item.position.row) * subCellSize,
@@ -3534,6 +4039,29 @@
                                       ref={el => attachmentSlotRefs.current[slotIndex] = el}
                                       className="border-2 border-dashed border-gray-400 bg-gray-100 flex-shrink-0 flex items-center justify-center"
                                       style={{ width: cellSize, height: cellSize }}
+                                      onClick={(e) => {
+                                        if (placementMode && !slot.occupied) {
+                                          e.stopPropagation();
+                                          const pmItem = placementMode.item;
+                                          const itemWeight = pmItem.currentWeight ?? pmItem.weight;
+                                          if (itemWeight > slot.maxWeight) {
+                                            alert(`Item too heavy for this slot (max ${slot.maxWeight} lbs)`);
+                                            return;
+                                          }
+                                          setPlacedItems(prev => prev.map(c => {
+                                            if (c.id !== openContainerId) return c;
+                                            const newExternalSlots = c.externalSlots.map((s, idx) =>
+                                              idx === slotIndex ? { ...s, occupied: pmItem } : s
+                                            );
+                                            const newExtWeight = newExternalSlots.reduce((sum, s) => sum + (s.occupied ? (s.occupied.currentWeight || s.occupied.weight) : 0), 0);
+                                            return { ...c, externalSlots: newExternalSlots, currentWeight: c.emptyWeight + calculateInternalWeight(c) + newExtWeight };
+                                          }));
+                                          if (placementMode.source === 'setAside') {
+                                            setSetAsideItems(prev => prev.filter(i => i.id !== placementMode.setAsideId));
+                                          }
+                                          setPlacementMode(null);
+                                        }
+                                      }}
                                     >
                                       {slot.occupied ? (
                                         <div
@@ -3590,8 +4118,10 @@
                        })()}
 
                     {openCoinpurseId && (() => {
-                      const coinpurse = placedItems.find(i => i.id === openCoinpurseId);
+                      const coinpurse = placedItems.find(i => i.id === openCoinpurseId)
+                        || placedItems.flatMap(i => i.internalGrid || []).find(i => i.id === openCoinpurseId);
                       if (!coinpurse) return null;
+                      const coinpurseParent = placedItems.find(c => c.internalGrid?.find(i => i.id === openCoinpurseId));
 
                       const coins = coinpurse.coins || { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 };
                       const colCap = coinpurse.columnCap || COINPURSE_POUCH_CAP;
@@ -3604,12 +4134,20 @@
                       const excessCoins = atCap ? Math.ceil(totalCoins - maxCols * colCap * COINS_PER_LB) : 0;
 
                       const gridRect = gridRef.current?.getBoundingClientRect();
-                      const bounds = getShapeBounds(getScaledContainerShape(coinpurse));
                       const scrollY = window.pageYOffset || document.documentElement.scrollTop;
                       const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
-                      const cpTop = (coinpurse.position.row + bounds.minRow) * subCellSize + (gridRect?.top || 0) + scrollY;
-                      const cpLeft = (coinpurse.position.col + bounds.minCol) * subCellSize + (gridRect?.left || 0) + scrollX;
-                      const cpWidth = (bounds.maxCol - bounds.minCol + 1) * subCellSize;
+                      let cpTop, cpLeft, cpWidth;
+                      if (coinpurseParent) {
+                        const parentBounds = getShapeBounds(getScaledContainerShape(coinpurseParent));
+                        cpLeft = (coinpurseParent.position.col + parentBounds.minCol) * subCellSize + (gridRect?.left || 0) + scrollX;
+                        cpTop  = (coinpurseParent.position.row + parentBounds.minRow) * subCellSize + (gridRect?.top  || 0) + scrollY;
+                        cpWidth = (parentBounds.maxCol - parentBounds.minCol + 1) * subCellSize;
+                      } else {
+                        const bounds = getShapeBounds(getScaledContainerShape(coinpurse));
+                        cpTop   = (coinpurse.position.row + bounds.minRow) * subCellSize + (gridRect?.top  || 0) + scrollY;
+                        cpLeft  = (coinpurse.position.col + bounds.minCol) * subCellSize + (gridRect?.left || 0) + scrollX;
+                        cpWidth = (bounds.maxCol - bounds.minCol + 1) * subCellSize;
+                      }
 
                       const overlayStyle = {
                         position: 'absolute',
@@ -3796,7 +4334,7 @@
                                 </div>
                                 {/* Remainder note */}
                                 {canConvert && remainder > 0 && (
-                                  <div className="text-xs text-orange-600">{remainder} {convertFrom.toUpperCase()} cannot be exchanged (stays)</div>
+                                  <div className="text-xs text-blue-600">{remainder} {convertFrom.toUpperCase()} cannot be exchanged (remainder)</div>
                                 )}
                                 {/* Action buttons */}
                                 <div className="flex gap-2 mt-1">
@@ -3827,7 +4365,7 @@
                         </div>
                     )}
 
-                    {selectedItem && !discardTarget && !placementMode && (
+                    {selectedItem && !discardTarget && !placementMode && !editingNotes && (
                         <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-300 px-3 pt-2 pb-3 flex flex-col gap-2 z-50">
                             <div className="text-center text-sm font-semibold text-gray-700 truncate px-2">
                               {selectedItem.magical && <span className="text-purple-500 mr-1">✦</span>}{selectedItem.name}
@@ -3845,10 +4383,39 @@
                                     <span className="text-xl">{openContainerId === selectedItem.id ? 'Close' : 'Open'}</span>
                                   </button>
                                 ) : selectedItem.containerType === 'coinpurse' ? (
-                                  <button onClick={() => { setOpenCoinpurseId(openCoinpurseId === selectedItem.id ? null : selectedItem.id); setOpenContainerId(null); setOverlayPosition(null); }} className="flex flex-col items-center gap-1 bg-amber-600 text-white px-4 py-3 rounded hover:bg-amber-700 flex-1">
+                                  <button onClick={() => {
+                                    const inContainer = openContainerId && placedItems.find(c => c.id === openContainerId)?.internalGrid.find(i => i.id === selectedItem.id);
+                                    setOpenCoinpurseId(openCoinpurseId === selectedItem.id ? null : selectedItem.id);
+                                    if (!inContainer) { setOpenContainerId(null); setOverlayPosition(null); }
+                                  }} className="flex flex-col items-center gap-1 bg-amber-600 text-white px-4 py-3 rounded hover:bg-amber-700 flex-1">
                                     <span className="text-xl">{openCoinpurseId === selectedItem.id ? 'Close' : 'Coins'}</span>
                                   </button>
-                                ) : (
+                                ) : selectedItem.containerType === 'stacked' ? (() => {
+                                  const _sb  = getShapeBounds(selectedItem.shape);
+                                  const _bH  = _sb.maxRow - _sb.minRow + 1;
+                                  const _bW  = _sb.maxCol - _sb.minCol + 1;
+                                  const _cap = selectedItem.capacityPerUnit || 1;
+                                  const _nxt = Math.max(1, Math.ceil((selectedItem.currentUnits + 1) / _cap));
+                                  let _maxR = GRID_SUB_ROWS, _maxC = GRID_SUB_COLS;
+                                  if (openContainerId) {
+                                    const _c = placedItems.find(c => c.id === openContainerId);
+                                    if (_c?.internalGrid.find(i => i.id === selectedItem.id)) {
+                                      const _d = getInternalDimensions(_c); _maxR = _d.subRows; _maxC = _d.subCols;
+                                    }
+                                  }
+                                  const _full = (selectedItem.scaleDirection || 'horizontal') === 'horizontal'
+                                    ? _nxt * _bH > _maxR : _nxt * _bW > _maxC;
+                                  return (
+                                    <>
+                                      <button onClick={() => adjustStackedQuantity(selectedItem.id, -1)} disabled={selectedItem.currentUnits <= 0} className="flex flex-col items-center gap-1 bg-orange-500 text-white px-4 py-3 rounded hover:bg-orange-600 flex-1 disabled:bg-gray-300 disabled:cursor-not-allowed">
+                                        <span className="text-xl">−</span>
+                                      </button>
+                                      <button onClick={() => adjustStackedQuantity(selectedItem.id, 1)} disabled={_full} className="flex flex-col items-center gap-1 bg-green-500 text-white px-4 py-3 rounded hover:bg-green-600 flex-1 disabled:bg-gray-300 disabled:cursor-not-allowed">
+                                        <span className="text-xl">+</span>
+                                      </button>
+                                    </>
+                                  );
+                                })() : (
                                   <>
                                     <button onClick={() => adjustContainerQuantity(selectedItem.id, -1)} disabled={selectedItem.currentUnits <= 0} className="flex flex-col items-center gap-1 bg-orange-500 text-white px-4 py-3 rounded hover:bg-orange-600 flex-1 disabled:bg-gray-300 disabled:cursor-not-allowed">
                                       <span className="text-xl">−</span>
@@ -3860,16 +4427,60 @@
                                 )}
                               </>
                             )}
-                            {!openContainerId && !openCoinpurseId && (
-                              <button onClick={() => setItemDown(selectedItem.id)} className="flex flex-col items-center gap-1 bg-yellow-500 text-white px-4 py-3 rounded hover:bg-yellow-600 flex-1">
-                                <ArrowDownToLine size={24} />
-                                <span className="text-xs">Set Down</span>
-                              </button>
-                            )}
+                            {selectedItem.magical && (() => {
+                                const _classes = selectedItem.attunementClasses;
+                                const _restricted = selectedItem.requiresAttunement && _classes?.length > 0 && characterClass && !_classes.includes(characterClass);
+                                if (selectedItem.attunedTo === characterName) return (
+                                    <button onClick={() => unattuneItem(selectedItem.id)}
+                                        className="flex flex-col items-center gap-1 bg-amber-700 text-white px-4 py-3 rounded hover:bg-amber-800 flex-1">
+                                        <AttuneIcon size={22} />
+                                        <span className="text-xs text-center leading-tight">Release<br/>Attunement</span>
+                                    </button>
+                                );
+                                if (_restricted) return (
+                                    <button disabled
+                                        className="flex flex-col items-center gap-1 bg-gray-300 text-gray-500 px-4 py-3 rounded flex-1 cursor-not-allowed"
+                                        title={`Requires attunement by: ${_classes.join(', ')}`}>
+                                        <AttuneIcon size={22} />
+                                        <span className="text-xs text-center leading-tight">{_classes.slice(0,2).join('/')}{_classes.length > 2 ? '…' : ''}</span>
+                                    </button>
+                                );
+                                return (
+                                    <button onClick={() => selectedItem.attunedTo
+                                        ? setAttuneConfirm({ itemId: selectedItem.id, currentHolder: selectedItem.attunedTo, name: selectedItem.name })
+                                        : attuneItem(selectedItem.id)}
+                                        className="flex flex-col items-center gap-1 bg-amber-500 text-white px-4 py-3 rounded hover:bg-amber-600 flex-1">
+                                        <AttuneIcon size={22} />
+                                        <span className="text-xs">Attune Item</span>
+                                    </button>
+                                );
+                            })()}
+                            <button onClick={() => { setEditingNotesValue(selectedItem.notes || ''); setEditingNotes(true); }} className="flex flex-col items-center gap-1 bg-gray-400 text-white px-4 py-3 rounded hover:bg-gray-500 flex-1">
+                              <NoteEdit size={24} />
+                              <span className="text-xs">Notes</span>
+                            </button>
+                            <button onClick={() => setItemDown(selectedItem.id)} className="flex flex-col items-center gap-1 bg-yellow-500 text-white px-4 py-3 rounded hover:bg-yellow-600 flex-1">
+                              <ArrowDownToLine size={24} />
+                              <span className="text-xs">Set Down</span>
+                            </button>
                             <button onClick={() => setDiscardTarget({ id: selectedItemId, name: selectedItem.name })} className="flex flex-col items-center gap-1 bg-red-500 text-white px-4 py-3 rounded hover:bg-red-600 flex-1">
                                 <Trash2 size={24} />
                                 <span className="text-xs">Discard</span>
                             </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {editingNotes && selectedItem && (
+                        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-400 px-3 pt-2 pb-3 z-50">
+                            <p className="text-center text-sm font-semibold text-gray-700 mb-2 truncate px-2">{selectedItem.name} — Notes</p>
+                            <textarea value={editingNotesValue} onChange={e => setEditingNotesValue(e.target.value)}
+                                rows={3} className="w-full mb-2 p-2 border rounded text-sm resize-none" placeholder="Add notes..." autoFocus />
+                            <div className="flex gap-2">
+                                <button onClick={() => saveItemNotes(selectedItem.id, editingNotesValue)}
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 flex-1">Save</button>
+                                <button onClick={() => setEditingNotes(false)}
+                                    className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
                             </div>
                         </div>
                     )}
@@ -3881,6 +4492,27 @@
                                 <button onClick={() => removeItem(discardTarget.id)} className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 flex-1">Yes, Discard</button>
                                 <button onClick={() => setDiscardTarget(null)} className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
                             </div>
+                        </div>
+                    )}
+
+                    {attuneConfirm && (
+                        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-amber-400 p-3 z-50">
+                            <p className="text-center font-medium text-sm mb-1">{attuneConfirm.name}</p>
+                            <p className="text-center text-sm text-gray-600 mb-3">
+                                Currently attuned to <strong>{attuneConfirm.currentHolder}</strong>. Replace attunement?
+                            </p>
+                            <div className="flex gap-2">
+                                <button onClick={() => { attuneItem(attuneConfirm.itemId); setAttuneConfirm(null); }}
+                                    className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 flex-1">Attune</button>
+                                <button onClick={() => setAttuneConfirm(null)}
+                                    className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {attuneAckFailed && (
+                        <div className="fixed top-0 left-0 right-0 bg-amber-600 text-white text-xs px-4 py-2 z-[9999] text-center">
+                            Attunement broadcast unconfirmed — please inform the item's current holder verbally.
                         </div>
                     )}
 
@@ -4250,7 +4882,81 @@
                         );
                     })()}
 
+                    {/* Attunements panel */}
+                    {showAttunements && (
+                        <div className="fixed inset-0 bg-black bg-opacity-60 z-[2100] flex items-end">
+                            <div className="w-full bg-white rounded-t-xl max-h-[70vh] flex flex-col">
+                                <div className="flex items-center justify-between px-4 py-3 border-b flex-shrink-0">
+                                    <h3 className="font-bold text-lg flex items-center gap-1.5"><AttuneIcon size={18} /> Attuned Items</h3>
+                                    <button onClick={() => setShowAttunements(false)} className="text-gray-500 text-2xl leading-none">✕</button>
+                                </div>
+                                <div className="overflow-y-auto flex-1">
+                                    {(() => {
+                                        const attuned = [];
+                                        placedItems.forEach(item => {
+                                            if (item.attunedTo) attuned.push(item);
+                                            item.internalGrid?.forEach(i => { if (i.attunedTo) attuned.push(i); });
+                                        });
+                                        if (attuned.length === 0) return (
+                                            <p className="text-center text-gray-400 py-8 text-sm">No items are currently attuned.</p>
+                                        );
+                                        return attuned.map(item => (
+                                            <div key={item.id} className="flex items-center gap-2 border-b px-4 py-3">
+                                                <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: item.color }} />
+                                                <span className="text-purple-500 text-xs">✦</span>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="font-medium text-sm truncate">{item.name}</div>
+                                                    <div className="text-xs text-amber-600">Attuned to: {item.attunedTo}</div>
+                                                </div>
+                                                <button onClick={() => unattuneItem(item.id)}
+                                                    className="bg-gray-200 text-gray-700 px-3 py-1 rounded text-xs hover:bg-gray-300 flex-shrink-0 ml-3">
+                                                    Release
+                                                </button>
+                                            </div>
+                                        ));
+                                    })()}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Receive Items modal */}
+                    {showRecycleBin && (
+                        <div className="fixed inset-0 bg-black bg-opacity-60 z-[2100] flex items-end">
+                            <div className="w-full bg-white rounded-t-xl max-h-[70vh] flex flex-col">
+                                <div className="flex items-center justify-between px-4 py-3 border-b flex-shrink-0">
+                                    <h3 className="font-bold text-lg">Recycle Bin</h3>
+                                    <button onClick={() => setShowRecycleBin(false)} className="text-gray-500 text-2xl leading-none">✕</button>
+                                </div>
+                                <div className="overflow-y-auto flex-1">
+                                    {recycleBin.length === 0 ? (
+                                        <p className="text-center text-gray-400 text-sm py-8">No recently discarded items.</p>
+                                    ) : recycleBin.map(entry => (
+                                        <div key={entry._recycleId} className="flex items-center justify-between px-4 py-3 border-b last:border-b-0">
+                                            <div>
+                                                <span className="font-medium text-sm">{entry.magical && <span className="text-purple-500 mr-1">✦</span>}{entry.name}</span>
+                                                <span className="text-xs text-gray-400 ml-2">{entry.currentWeight ?? entry.weight} lbs</span>
+                                                {entry.notes && <p className="text-xs text-gray-500 italic mt-0.5">{entry.notes}</p>}
+                                            </div>
+                                            <button onClick={() => restoreFromRecycleBin(entry._recycleId)}
+                                                className="bg-green-500 text-white px-3 py-1.5 rounded text-sm hover:bg-green-600 flex-shrink-0 ml-3">
+                                                Restore
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                                {recycleBin.length > 0 && (
+                                    <div className="px-4 py-3 border-t flex-shrink-0">
+                                        <button onClick={() => { setRecycleBin([]); try { localStorage.removeItem('cubeventory_recycle'); } catch {} }}
+                                            className="w-full bg-red-100 text-red-600 py-2 rounded text-sm hover:bg-red-200">
+                                            Clear All
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                     {showReceiveModal && (
                         <div className="fixed inset-0 bg-black z-[2100] flex flex-col">
                             <div className="flex items-center justify-between px-4 py-3 bg-gray-900 flex-shrink-0">
@@ -4362,7 +5068,7 @@
                                   height: sourceSubCellSize,
                                   top: gridRect.top + (absRow * sourceSubCellSize),
                                   left: gridRect.left + (absCol * sourceSubCellSize),
-                                  boxShadow: '0 0 8px rgba(132, 204, 22, 0.8)',
+                                  borderColor: selectionColor,
                                 }}
                               />
                             );
@@ -4382,7 +5088,8 @@
                                   top: gridRect.top + (absRow * sourceSubCellSize),
                                   left: gridRect.left + (absCol * sourceSubCellSize),
                                   backgroundColor: item.color,
-                                  opacity: 0.8
+                                  opacity: 0.8,
+                                  ...getItemBorderStyle(shape, r, c, darkenColor(item.color)),
                                 }}
                               />
                             );
