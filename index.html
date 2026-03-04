@@ -265,6 +265,7 @@
             const [showRecycleBin,  setShowRecycleBin]  = useState(false);
             const [editingNotes,    setEditingNotes]    = useState(false);
             const [editingNotesValue, setEditingNotesValue] = useState('');
+            const [showNotesExpanded, setShowNotesExpanded] = useState(false);
             const [libDeleteId,    setLibDeleteId]    = useState(null);
             const [isPainting, setIsPainting] = useState(false);
             const [paintMode, setPaintMode] = useState(null); // 'add' or 'remove'
@@ -2369,7 +2370,7 @@
             }, [openCoinpurseId]);
 
             // Close notes editor when selection changes
-            useEffect(() => { setEditingNotes(false); }, [selectedItemId]);
+            useEffect(() => { setEditingNotes(false); setShowNotesExpanded(false); }, [selectedItemId]);
 
             // Generate QR code into the DOM ref whenever the QR modal opens
             useEffect(() => {
@@ -3366,17 +3367,17 @@
                                             {sessionStatus === 'reconnecting' && <span className="text-xs">↻</span>}
                                             {sessionStatus === 'reconnect-failed' && <span className="text-xs font-bold">!</span>}
                                         </button>
-                                        <label className="flex items-center gap-1.5 text-sm text-gray-600 flex-shrink-0 cursor-pointer select-none">
-                                            Selection Highlight Color:
-                                            <input type="color" value={selectionColor} onChange={(e) => { setSelectionColor(e.target.value); localStorage.setItem('cubeventory_sel_color', e.target.value); }} className="w-7 h-7 rounded cursor-pointer border border-gray-300 p-0.5" />
-                                        </label>
                                         <input ref={fileInputRef} type="file" accept=".json" onChange={importData} className="hidden" />
                                     </div>
+                                    <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none mt-1">
+                                        Selection Highlight Color:
+                                        <input type="color" value={selectionColor} onChange={(e) => { setSelectionColor(e.target.value); localStorage.setItem('cubeventory_sel_color', e.target.value); }} className="w-7 h-7 rounded cursor-pointer border border-gray-300 p-0.5" />
+                                    </label>
                                 </div>
                             )}
                         </div>
 
-                        <div className="bg-white p-3 rounded-lg shadow mb-3">
+                        {(!libraryCollapsed || isCreatingItem) && <div className="bg-white p-3 rounded-lg shadow mb-3">
                           {!isCreatingItem ? (
                             <button onClick={() => { setIsCreatingItem(true); setSelectedItemId(null); }} className="flex items-center gap-1 text-purple-600 text-sm font-medium hover:text-purple-800">
                               <Plus size={14} /> New Item
@@ -3407,10 +3408,8 @@
                               <input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="Item Name" className="w-full mb-2 p-2 border rounded" />
                               <textarea value={newItemNotes} onChange={(e) => setNewItemNotes(e.target.value)} placeholder="Notes (optional)" rows={2} className="w-full mb-2 p-2 border rounded text-sm resize-none" />
                               <div className="flex items-center gap-2 mb-2">
-                                <label className="flex items-center gap-2 cursor-pointer select-none flex-1">
-                                  <input type="checkbox" checked={newItemMagical} onChange={(e) => setNewItemMagical(e.target.checked)} className="w-4 h-4 accent-purple-500" />
-                                  <span className="text-sm text-purple-600 font-medium">✦ Magical item</span>
-                                </label>
+                                <input type="checkbox" checked={newItemMagical} onChange={(e) => setNewItemMagical(e.target.checked)} className="w-4 h-4 accent-purple-500 flex-shrink-0" />
+                                <span className="text-sm text-purple-600 font-medium">✦ Magical item</span>
                                 {newItemMagical && (
                                   <input type="color" value={newItemMagicalColor} onChange={(e) => setNewItemMagicalColor(e.target.value)} title="Glow color" className="w-8 h-8 rounded cursor-pointer border border-gray-300 p-0.5 flex-shrink-0" />
                                 )}
@@ -3562,7 +3561,7 @@
                                 </div>
                             </>
                           )}
-                        </div>
+                        </div>}
 
                         <div className="bg-white p-3 rounded-lg shadow mb-3">
                             <div className="flex items-center justify-between cursor-pointer select-none" onClick={() => setLibraryCollapsed(c => !c)}>
@@ -3677,21 +3676,21 @@
                         <div className="bg-white p-3 rounded-lg shadow">
                             <div className="flex items-center justify-between mb-2">
                                 <h2 className="text-lg font-bold">Inventory Grid</h2>
-                                <div className="flex gap-1.5">
+                                <div className="grid grid-cols-2 gap-1.5">
                                     <button onClick={() => setShowTransferPanel(true)}
-                                        className="flex items-center gap-1 bg-teal-500 text-white px-3 py-1 rounded text-xs hover:bg-teal-600">
+                                        className="flex items-center justify-center gap-1 bg-teal-500 text-white px-3 py-1 rounded text-xs hover:bg-teal-600">
                                         Send Items{transferQueue.length > 0 && <span className="bg-white text-teal-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{transferQueue.length}</span>}
                                     </button>
                                     <button onClick={() => setShowReceiveModal(true)}
-                                        className="flex items-center gap-1 bg-teal-600 text-white px-3 py-1 rounded text-xs hover:bg-teal-700">
+                                        className="flex items-center justify-center gap-1 bg-teal-600 text-white px-3 py-1 rounded text-xs hover:bg-teal-700">
                                         Receive Items
                                     </button>
                                     <button onClick={() => setShowAttunements(true)}
-                                        className="flex items-center gap-1 bg-amber-500 text-white px-3 py-1 rounded text-xs hover:bg-amber-600">
-                                        <AttuneIcon size={12} /> Attunements
+                                        className="flex items-center justify-center gap-1 bg-amber-500 text-white px-3 py-1 rounded text-xs hover:bg-amber-600">
+                                        <AttuneIcon size={12} /> Attunements{myAttunements.length > 0 && <span className="bg-white text-amber-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{myAttunements.length}</span>}
                                     </button>
                                     <button onClick={() => setShowRecycleBin(true)}
-                                        className="flex items-center gap-1 bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600">
+                                        className="flex items-center justify-center gap-1 bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600">
                                         Recycle Bin{recycleBin.length > 0 && <span className="bg-white text-gray-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{recycleBin.length}</span>}
                                     </button>
                                 </div>
@@ -3815,7 +3814,7 @@
                                                       })}
                                                       </div>
 
-                                                      {item.attunedTo && (() => {
+                                                      {item.attunedTo === characterName && (() => {
                                                         const bs = Math.max(8, Math.floor(subCellSize * 0.55));
                                                         return (
                                                           <div className="absolute pointer-events-none" style={{
@@ -4073,7 +4072,7 @@
                                     })}
                                     </div>
 
-                                    {item.attunedTo && (() => {
+                                    {item.attunedTo === characterName && (() => {
                                       const bs = Math.max(8, Math.floor(subCellSize * 0.55));
                                       return (
                                         <div className="absolute pointer-events-none" style={{
@@ -4436,12 +4435,16 @@
                         </div>
                     )}
 
-                    {selectedItem && !discardTarget && !placementMode && !editingNotes && (
+                    {selectedItem && !discardTarget && !placementMode && !editingNotes && !showNotesExpanded && (
                         <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-300 px-3 pt-2 pb-3 flex flex-col gap-2 z-50">
                             <div className="text-center text-sm font-semibold text-gray-700 truncate px-2">
                               {selectedItem.magical && <span className="text-purple-500 mr-1">✦</span>}{selectedItem.name}
                             </div>
-                            {selectedItem.notes && <div className="text-center text-xs text-gray-500 italic px-2 -mt-1">{selectedItem.notes}</div>}
+                            {selectedItem.notes && (
+                                <div className="text-center text-xs text-gray-500 italic px-2 -mt-1 truncate">
+                                    {selectedItem.notes}
+                                </div>
+                            )}
                             <div className="flex gap-2">
                             <button onClick={() => flipItem(selectedItem.id)} className="flex flex-col items-center gap-1 bg-blue-500 text-white px-4 py-3 rounded hover:bg-blue-600 flex-1">
                                 <FlipHorizontal size={24} />
@@ -4526,7 +4529,7 @@
                                     </button>
                                 );
                             })()}
-                            <button onClick={() => { setEditingNotesValue(selectedItem.notes || ''); setEditingNotes(true); }} className="flex flex-col items-center gap-1 bg-gray-400 text-white px-4 py-3 rounded hover:bg-gray-500 flex-1">
+                            <button onClick={() => setShowNotesExpanded(true)} className="flex flex-col items-center gap-1 bg-gray-400 text-white px-4 py-3 rounded hover:bg-gray-500 flex-1">
                               <NoteEdit size={24} />
                               <span className="text-xs">Notes</span>
                             </button>
@@ -4539,6 +4542,18 @@
                                 <span className="text-xs">Discard</span>
                             </button>
                             </div>
+                        </div>
+                    )}
+
+                    {showNotesExpanded && selectedItem && (
+                        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-300 px-3 pt-2 pb-3 z-50">
+                            <div className="flex items-center justify-between mb-2">
+                                <p className="text-sm font-semibold text-gray-700 truncate">{selectedItem.name} — Notes</p>
+                                <button onClick={() => setShowNotesExpanded(false)} className="text-gray-400 hover:text-gray-600 text-lg leading-none ml-2">✕</button>
+                            </div>
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap max-h-40 overflow-y-auto mb-3">{selectedItem.notes || <span className="text-gray-400 italic">No notes.</span>}</p>
+                            <button onClick={() => { setEditingNotesValue(selectedItem.notes || ''); setEditingNotes(true); setShowNotesExpanded(false); }}
+                                className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500 w-full">Edit Notes</button>
                         </div>
                     )}
 
