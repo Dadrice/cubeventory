@@ -3681,13 +3681,13 @@
                                         className="flex items-center justify-center gap-1 bg-teal-500 text-white px-3 py-1 rounded text-xs hover:bg-teal-600">
                                         Send Items{transferQueue.length > 0 && <span className="bg-white text-teal-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{transferQueue.length}</span>}
                                     </button>
-                                    <button onClick={() => setShowReceiveModal(true)}
-                                        className="flex items-center justify-center gap-1 bg-teal-600 text-white px-3 py-1 rounded text-xs hover:bg-teal-700">
-                                        Receive Items
-                                    </button>
                                     <button onClick={() => setShowAttunements(true)}
                                         className="flex items-center justify-center gap-1 bg-amber-500 text-white px-3 py-1 rounded text-xs hover:bg-amber-600">
                                         <AttuneIcon size={12} /> Attunements{myAttunements.length > 0 && <span className="bg-white text-amber-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{myAttunements.length}</span>}
+                                    </button>
+                                    <button onClick={() => setShowReceiveModal(true)}
+                                        className="flex items-center justify-center gap-1 bg-teal-600 text-white px-3 py-1 rounded text-xs hover:bg-teal-700">
+                                        Receive Items
                                     </button>
                                     <button onClick={() => setShowRecycleBin(true)}
                                         className="flex items-center justify-center gap-1 bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600">
