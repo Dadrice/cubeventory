@@ -218,14 +218,16 @@
                 }
                 return saved?.strength || 10;
             });
+            // Normalise legacy string saves → array; always stored as string[]
+            const normaliseClass = (v) => Array.isArray(v) ? v : (v ? [v] : []);
             const [characterClass, setCharacterClass] = useState(() => {
                 const saved = loadAutoSave();
                 if (saved?.characters?.length > 0) {
                     const aid = saved.activeCharacterId || saved.characters[0].id;
                     const ac = saved.characters.find(c => c.id === aid) || saved.characters[0];
-                    return ac.characterClass || '';
+                    return normaliseClass(ac.characterClass);
                 }
-                return '';
+                return [];
             });
             const [cellSize,      setCellSize]      = useState(40);
             const [items,         setItems]         = useState(() => { const s = loadAutoSave(); return s?.libraryItems || s?.items || []; });
@@ -359,6 +361,7 @@
 
             const [showAttunements,  setShowAttunements]  = useState(false);
             const [attuneConfirm,    setAttuneConfirm]    = useState(null); // { itemId, currentHolder, name }
+            const [attuneClassMsg,   setAttuneClassMsg]   = useState(null); // { name, classes: string[] }
             const [attuneAckFailed,  setAttuneAckFailed]  = useState(false);
             // Personal attunement tracking: items this character is attuned to, regardless of physical location
             // Filter out any legacy entries missing a stable attuneId (pre-migration data)
@@ -2586,9 +2589,9 @@
 
             const startFresh = () => {
                 setItems([]);
-                setCharacters([{ id: DEFAULT_CHAR_ID, name: '', strength: 10, characterClass: '', placedItems: [], setAsideItems: [], myAttunements: [] }]);
+                setCharacters([{ id: DEFAULT_CHAR_ID, name: '', strength: 10, characterClass: [], placedItems: [], setAsideItems: [], myAttunements: [] }]);
                 setActiveCharacterId(DEFAULT_CHAR_ID);
-                setCharacterName(''); setStrength(10); setCharacterClass('');
+                setCharacterName(''); setStrength(10); setCharacterClass([]);
                 setPlacedItems([]); setSetAsideItems([]); setMyAttunements([]);
                 setShowStartup(false);
             };
@@ -2611,7 +2614,7 @@
                 if (!newChar) return;
                 setCharacterName(newChar.name);
                 setStrength(newChar.strength);
-                setCharacterClass(newChar.characterClass || '');
+                setCharacterClass(normaliseClass(newChar.characterClass));
                 setPlacedItems(newChar.placedItems);
                 setSetAsideItems(newChar.setAsideItems);
                 setMyAttunements(validAttunements(newChar.myAttunements));
@@ -2628,11 +2631,11 @@
                     : c
                 );
                 const newId = `char_${Date.now()}`;
-                const newChar = { id: newId, name: '', strength: 10, characterClass: '', placedItems: [], setAsideItems: [], myAttunements: [] };
+                const newChar = { id: newId, name: '', strength: 10, characterClass: [], placedItems: [], setAsideItems: [], myAttunements: [] };
                 setCharacters([...updatedChars, newChar]);
                 setCharacterName('');
                 setStrength(10);
-                setCharacterClass('');
+                setCharacterClass([]);
                 setPlacedItems([]);
                 setSetAsideItems([]);
                 setMyAttunements([]);
@@ -3293,7 +3296,8 @@
                             >
                                 <div className="flex items-center gap-3 min-w-0">
                                     <span className="font-semibold text-sm truncate">{characterName || 'Unnamed'}</span>
-                                    <span className="text-xs text-gray-400 flex-shrink-0">Str {strength}</span>
+                                    <span className="text-xs text-gray-400 flex-shrink-0">Str: {strength}</span>
+                                    {characterClass.length > 0 && <span className="text-xs text-gray-400 truncate">{characterClass.join(' / ')}</span>}
                                 </div>
                                 <span className="text-gray-400 text-xs ml-2 flex-shrink-0">{controlsCollapsed ? '▼' : '▲'}</span>
                             </button>
@@ -3333,13 +3337,25 @@
                                             <input type="number" value={strength} onChange={(e) => setStrength(Math.max(1, Math.min(30, parseInt(e.target.value) || 1)))} className="w-full border rounded px-2 py-1 text-sm" min="1" max="30" />
                                         </div>
                                     </div>
-                                    {/* Class */}
+                                    {/* Class (supports multiclassing) */}
                                     <div>
                                         <label className="block text-xs font-medium mb-1">Class</label>
-                                        <select value={characterClass} onChange={(e) => setCharacterClass(e.target.value)} className="w-full border rounded px-2 py-1 text-sm">
-                                            <option value="">— None selected —</option>
-                                            {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
-                                        </select>
+                                        {characterClass.length > 0 && (
+                                            <div className="flex flex-wrap gap-1 mb-1">
+                                                {characterClass.map(c => (
+                                                    <span key={c} className="flex items-center gap-1 bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">
+                                                        {c}
+                                                        <button onClick={() => setCharacterClass(prev => prev.filter(x => x !== c))} className="text-purple-400 hover:text-purple-700 leading-none text-sm">✕</button>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                        {characterClass.length < CLASSES.length && (
+                                            <select value="" onChange={(e) => { if (e.target.value) setCharacterClass(prev => [...prev, e.target.value]); }} className="w-full border rounded px-2 py-1 text-sm text-gray-500">
+                                                <option value="">{characterClass.length === 0 ? '— Select class —' : '+ Add class…'}</option>
+                                                {CLASSES.filter(c => !characterClass.includes(c)).map(c => <option key={c} value={c}>{c}</option>)}
+                                            </select>
+                                        )}
                                     </div>
                                     {/* Cell size */}
                                     <div>
@@ -3683,7 +3699,7 @@
                                     </button>
                                     <button onClick={() => setShowAttunements(true)}
                                         className="flex items-center justify-center gap-1 bg-amber-500 text-white px-3 py-1 rounded text-xs hover:bg-amber-600">
-                                        <AttuneIcon size={12} /> Attunements{myAttunements.length > 0 && <span className="bg-white text-amber-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{myAttunements.length}</span>}
+                                        Attunements{myAttunements.length > 0 && <span className="bg-white text-amber-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{myAttunements.length}</span>} <AttuneIcon size={12} />
                                     </button>
                                     <button onClick={() => setShowReceiveModal(true)}
                                         className="flex items-center justify-center gap-1 bg-teal-600 text-white px-3 py-1 rounded text-xs hover:bg-teal-700">
@@ -4503,7 +4519,7 @@
                             )}
                             {selectedItem.magical && (() => {
                                 const _classes = selectedItem.attunementClasses;
-                                const _restricted = selectedItem.requiresAttunement && _classes?.length > 0 && characterClass && !_classes.includes(characterClass);
+                                const _restricted = selectedItem.requiresAttunement && _classes?.length > 0 && characterClass.length > 0 && !characterClass.some(cls => _classes.includes(cls));
                                 if (selectedItem.attunedTo === characterName) return (
                                     <button onClick={() => unattuneItem(selectedItem.id)}
                                         className="flex flex-col items-center gap-1 bg-amber-700 text-white px-4 py-3 rounded hover:bg-amber-800 flex-1">
@@ -4512,11 +4528,10 @@
                                     </button>
                                 );
                                 if (_restricted) return (
-                                    <button disabled
-                                        className="flex flex-col items-center gap-1 bg-gray-300 text-gray-500 px-4 py-3 rounded flex-1 cursor-not-allowed"
-                                        title={`Requires attunement by: ${_classes.join(', ')}`}>
+                                    <button onClick={() => setAttuneClassMsg({ name: selectedItem.name, classes: _classes })}
+                                        className="flex flex-col items-center gap-1 bg-gray-300 text-gray-500 px-4 py-3 rounded flex-1 hover:bg-gray-400 hover:text-gray-700">
                                         <AttuneIcon size={22} />
-                                        <span className="text-xs text-center leading-tight">{_classes.slice(0,2).join('/')}{_classes.length > 2 ? '…' : ''}</span>
+                                        <span className="text-xs text-center leading-tight">Class Req.<br/>Unmet</span>
                                     </button>
                                 );
                                 return (
@@ -4593,6 +4608,20 @@
                                 <button onClick={() => setAttuneConfirm(null)}
                                     className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
                             </div>
+                        </div>
+                    )}
+
+                    {attuneClassMsg && (
+                        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-400 p-3 z-50">
+                            <p className="text-center font-medium text-sm mb-1">{attuneClassMsg.name}</p>
+                            <p className="text-center text-sm text-gray-600 mb-2">Attunement requires:</p>
+                            <div className="flex flex-wrap justify-center gap-1.5 mb-3">
+                                {attuneClassMsg.classes.map(c => (
+                                    <span key={c} className="bg-gray-100 text-gray-700 text-xs px-2 py-1 rounded-full">{c}</span>
+                                ))}
+                            </div>
+                            <button onClick={() => setAttuneClassMsg(null)}
+                                className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 w-full">Dismiss</button>
                         </div>
                     )}
 
