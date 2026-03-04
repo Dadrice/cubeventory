@@ -360,12 +360,14 @@
             const [attuneConfirm,    setAttuneConfirm]    = useState(null); // { itemId, currentHolder, name }
             const [attuneAckFailed,  setAttuneAckFailed]  = useState(false);
             // Personal attunement tracking: items this character is attuned to, regardless of physical location
+            // Filter out any legacy entries missing a stable attuneId (pre-migration data)
+            const validAttunements = (arr) => (arr || []).filter(a => !!a.attuneId);
             const [myAttunements, setMyAttunements] = useState(() => {
                 const saved = loadAutoSave();
                 if (saved?.characters?.length > 0) {
                     const aid = saved.activeCharacterId || saved.characters[0].id;
                     const ac = saved.characters.find(c => c.id === aid) || saved.characters[0];
-                    return ac.myAttunements || [];
+                    return validAttunements(ac.myAttunements);
                 }
                 return [];
             });
@@ -2611,7 +2613,7 @@
                 setCharacterClass(newChar.characterClass || '');
                 setPlacedItems(newChar.placedItems);
                 setSetAsideItems(newChar.setAsideItems);
-                setMyAttunements(newChar.myAttunements || []);
+                setMyAttunements(validAttunements(newChar.myAttunements));
                 setActiveCharacterId(charId);
                 setTransferQueue([]);
                 setOpenContainerId(null);
@@ -2850,6 +2852,24 @@
                 if (attuneId) broadcastAttuneUpdate(attuneId, null);
             };
 
+            // Remote release: item is in another player's inventory but player is ending their attunement
+            // (death, at-capacity swap, etc.). Broadcasts a conditional release — receiver only clears
+            // attunedTo if it still matches releasedBy, so an already-overwritten attunement is unaffected.
+            const remoteReleaseAttunement = (attuneId) => {
+                setMyAttunements(prev => prev.filter(a => a.attuneId !== attuneId));
+                if (!sessionRoleRef.current) return;
+                const requestId = `${Date.now()}-${Math.random()}`;
+                const timer = setTimeout(() => {
+                    if (pendingAttuneAcksRef.current.has(requestId)) {
+                        pendingAttuneAcksRef.current.delete(requestId);
+                        setAttuneAckFailed(true);
+                        setTimeout(() => setAttuneAckFailed(false), 6000);
+                    }
+                }, 3000);
+                pendingAttuneAcksRef.current.set(requestId, timer);
+                broadcastSession({ type: 'attune_release', attuneId, releasedBy: characterName, requestId });
+            };
+
             // Handles all incoming data messages from any peer
             const handleSessionMsg = (msg, fromId) => {
                 if (msg.type === 'hello') {
@@ -2914,6 +2934,19 @@
                         clearTimeout(timer);
                         pendingAttuneAcksRef.current.delete(msg.requestId);
                     }
+                } else if (msg.type === 'attune_release') {
+                    // Conditional clear: only remove attunedTo if it still matches the player who released.
+                    // Safe to apply even if attunement was already overwritten by someone else.
+                    setPlacedItems(prev => prev.map(item => {
+                        if (item.attuneId === msg.attuneId && item.attunedTo === msg.releasedBy)
+                            return { ...item, attunedTo: null };
+                        if (item.internalGrid?.find(i => i.attuneId === msg.attuneId && i.attunedTo === msg.releasedBy))
+                            return { ...item, internalGrid: item.internalGrid.map(i =>
+                                i.attuneId === msg.attuneId && i.attunedTo === msg.releasedBy ? { ...i, attunedTo: null } : i
+                            )};
+                        return item;
+                    }));
+                    sendTo(fromId, { type: 'attune_ack', requestId: msg.requestId });
                 }
             };
 
@@ -4949,9 +4982,15 @@
                                                     <div className={`font-medium text-sm truncate ${!inInventory ? 'text-gray-400' : ''}`}>{itemName}</div>
                                                     {!inInventory && <div className="text-xs text-gray-400">Transferred to another player</div>}
                                                 </div>
-                                                {inInventory && (
+                                                {inInventory ? (
                                                     <button onClick={() => unattuneItem(foundLocalId)}
                                                         className="bg-gray-200 text-gray-700 px-3 py-1 rounded text-xs hover:bg-gray-300 flex-shrink-0 ml-3">
+                                                        Release
+                                                    </button>
+                                                ) : (
+                                                    <button onClick={() => remoteReleaseAttunement(attuneId)}
+                                                        className="bg-gray-200 text-gray-700 px-3 py-1 rounded text-xs hover:bg-gray-300 flex-shrink-0 ml-3"
+                                                        title="End your attunement — signals the holder to clear it if it still shows your name">
                                                         Release
                                                     </button>
                                                 )}
