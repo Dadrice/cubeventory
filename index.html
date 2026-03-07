@@ -4721,7 +4721,7 @@
                     )}
 
                     {showNotesExpanded && selectedItem && (
-                        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-300 dark:border-gray-600 px-3 pt-2 pb-3 z-50">
+                        <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t-2 border-gray-300 dark:border-gray-600 px-3 pt-2 pb-3 z-50">
                             <div className="flex items-center justify-between mb-2">
                                 <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 truncate">{selectedItem.name} — Notes</p>
                                 <button onClick={() => setShowNotesExpanded(false)} className="text-gray-400 hover:text-gray-600 text-lg leading-none ml-2">✕</button>
@@ -4747,41 +4747,41 @@
                     )}
 
                     {discardTarget && (
-                        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-red-500 p-3 z-50">
+                        <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t-2 border-red-500 p-3 z-50">
                             <p className="text-center mb-2 font-medium">Discard {discardTarget.name}?</p>
                             <div className="flex gap-2">
                                 <button onClick={() => removeItem(discardTarget.id)} className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 flex-1">Yes, Discard</button>
-                                <button onClick={() => setDiscardTarget(null)} className="bg-gray-50 dark:bg-gray-9000 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
+                                <button onClick={() => setDiscardTarget(null)} className="bg-gray-50 dark:bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 dark:hover:bg-gray-700 flex-1">Cancel</button>
                             </div>
                         </div>
                     )}
 
                     {attuneConfirm && (
-                        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-amber-400 p-3 z-50">
+                        <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t-2 border-amber-400 p-3 z-50">
                             <p className="text-center font-medium text-sm mb-1">{attuneConfirm.name}</p>
-                            <p className="text-center text-sm text-gray-600 mb-3">
+                            <p className="text-center text-sm text-gray-600 dark:text-gray-400 mb-3">
                                 Currently attuned to <strong>{attuneConfirm.currentHolder}</strong>. Replace attunement?
                             </p>
                             <div className="flex gap-2">
                                 <button onClick={() => { attuneItem(attuneConfirm.itemId); setAttuneConfirm(null); }}
                                     className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 flex-1">Attune</button>
                                 <button onClick={() => setAttuneConfirm(null)}
-                                    className="bg-gray-50 dark:bg-gray-9000 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
+                                    className="bg-gray-50 dark:bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
                             </div>
                         </div>
                     )}
 
                     {attuneClassMsg && (
-                        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-400 p-3 z-50">
+                        <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t-2 border-gray-400 p-3 z-50">
                             <p className="text-center font-medium text-sm mb-1">{attuneClassMsg.name}</p>
-                            <p className="text-center text-sm text-gray-600 mb-2">Attunement requires:</p>
+                            <p className="text-center text-sm text-gray-400 mb-2">Attunement requires:</p>
                             <div className="flex flex-wrap justify-center gap-1.5 mb-3">
                                 {attuneClassMsg.classes.map(c => (
-                                    <span key={c} className="bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-xs px-2 py-1 rounded-full">{c}</span>
+                                    <span key={c} className="bg-gray-100 dark:bg-gray-600 text-gray-700 dark:text-gray-300 text-xs px-2 py-1 rounded-full">{c}</span>
                                 ))}
                             </div>
                             <button onClick={() => setAttuneClassMsg(null)}
-                                className="bg-gray-50 dark:bg-gray-9000 text-white px-4 py-2 rounded hover:bg-gray-600 w-full">Dismiss</button>
+                                className="bg-gray-50 dark:bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 dark:hover:bg-gray-700 w-full">Dismiss</button>
                         </div>
                     )}
 
