@@ -1937,14 +1937,11 @@
 
                     if (openContainerId && internalGridRef.current) {
                       const internalRect = internalGridRef.current.getBoundingClientRect();
-                      const anchorCol = Math.round((clientX - internalRect.left - dragOffset.x) / subCellSize);
-                      const anchorRow = Math.round((clientY - internalRect.top - dragOffset.y) / subCellSize);
-                      const itemLeft   = internalRect.left + (anchorCol + bounds.minCol) * subCellSize;
-                      const itemRight  = internalRect.left + (anchorCol + bounds.maxCol + 1) * subCellSize;
-                      const itemTop    = internalRect.top  + (anchorRow + bounds.minRow) * subCellSize;
-                      const itemBottom = internalRect.top  + (anchorRow + bounds.maxRow + 1) * subCellSize;
-                      const isItemOverInternal = itemLeft >= internalRect.left && itemRight <= internalRect.right &&
-                                                 itemTop >= internalRect.top && itemBottom <= internalRect.bottom;
+                      const { subRows: internalSubRows, subCols: internalSubCols } = getInternalDimensions(container);
+                      const { row: slotIntRow, col: slotIntCol,
+                              isOutOfBounds: slotIntOOB, isEntirelyOutOfBounds: slotIntEntirelyOOB } = resolveDropPosition(
+                        clientX, clientY, dragOffset, internalRect, subCellSize, bounds, internalSubRows, internalSubCols
+                      );
 
                       if (isOverAttachmentSlots && targetSlotIndex !== -1 && container) {
                         // Slot-to-slot takes priority
@@ -1970,15 +1967,16 @@
                             };
                           }));
                         }
-                      } else if (isItemOverInternal && container) {
-                        // Internal grid is next priority
+                      } else if (!slotIntEntirelyOOB && container) {
+                        // Item has overlap with internal grid — next priority
                         const internalWeight = calculateInternalWeight(container);
                         if (internalWeight + slotItem.weight > container.internalCapacity) {
                           alert('Exceeds internal capacity!');
                           snapBackToSlot();
                         } else {
-                          const { subRows: internalSubRows, subCols: internalSubCols } = getInternalDimensions(container);
-                          const { row: iRow, col: iCol } = clampPosition(anchorRow, anchorCol, bounds, internalSubRows, internalSubCols);
+                          const { row: iRow, col: iCol } = slotIntOOB
+                            ? clampPosition(slotIntRow, slotIntCol, bounds, internalSubRows, internalSubCols)
+                            : { row: slotIntRow, col: slotIntCol };
                           detachFromSlot((c, newExternalSlots) => {
                             const newExternalWeight = newExternalSlots.reduce((sum, s) => sum + (s.occupied ? (s.occupied.currentWeight || s.occupied.weight) : 0), 0);
                             return {
@@ -2037,18 +2035,13 @@
                     if (draggedInternalItem && gridRef.current) {
                       const mainGridRect = gridRef.current.getBoundingClientRect();
 
-                      // Shape-aware internal grid check: compute where the item's body would land
-                      // and verify the full bounding box fits within the internal grid rect
                       const shape = getScaledContainerShape(draggedInternalItem);
                       const bounds = getShapeBounds(shape);
-                      const anchorCol = Math.round((clientX - internalRect.left - dragOffset.x) / subCellSize);
-                      const anchorRow = Math.round((clientY - internalRect.top - dragOffset.y) / subCellSize);
-                      const itemLeft   = internalRect.left + (anchorCol + bounds.minCol) * subCellSize;
-                      const itemRight  = internalRect.left + (anchorCol + bounds.maxCol + 1) * subCellSize;
-                      const itemTop    = internalRect.top  + (anchorRow + bounds.minRow) * subCellSize;
-                      const itemBottom = internalRect.top  + (anchorRow + bounds.maxRow + 1) * subCellSize;
-                      const isItemOverInternal = itemLeft >= internalRect.left && itemRight <= internalRect.right &&
-                                                 itemTop >= internalRect.top && itemBottom <= internalRect.bottom;
+                      const { subRows: intSubRows, subCols: intSubCols } = getInternalDimensions(container);
+                      const { row: intRow, col: intCol,
+                              isOutOfBounds: intOOB, isEntirelyOutOfBounds: intEntirelyOOB } = resolveDropPosition(
+                        clientX, clientY, dragOffset, internalRect, subCellSize, bounds, intSubRows, intSubCols
+                      );
 
                       const isOverMainGrid = clientX >= mainGridRect.left && clientX <= mainGridRect.right &&
                                              clientY >= mainGridRect.top && clientY <= mainGridRect.bottom;
@@ -2122,28 +2115,24 @@
                           }));
                         }
                         itemWasHandled = true;
-                      } else if (isItemOverInternal) {
-                        // Item body fits within internal grid — commit the new position
-                        const { row: newRow, col: newCol, isOutOfBounds } = resolveDropPosition(
-                          clientX, clientY, dragOffset, internalRect, subCellSize, bounds,
-                          Math.ceil(container.internalCapacity / 5) * SUB_DIVISIONS,
-                          5 * SUB_DIVISIONS
-                        );
+                      } else if (!intEntirelyOOB) {
+                        // Item has overlap with internal grid — clamp if partially outside, then place
+                        const { row: finalRow, col: finalCol } = intOOB
+                          ? clampPosition(intRow, intCol, bounds, intSubRows, intSubCols)
+                          : { row: intRow, col: intCol };
                         setPlacedItems(prev => prev.map(c => {
                           if (c.id !== openContainerId) return c;
                           return {
                             ...c,
                             internalGrid: c.internalGrid.map(i =>
-                              i.id === draggedItem
-                                ? { ...i, position: isOutOfBounds ? dragStartPosition : { row: newRow, col: newCol } }
-                                : i
+                              i.id === draggedItem ? { ...i, position: { row: finalRow, col: finalCol } } : i
                             )
                           };
                         }));
                         itemWasHandled = true;
-                      } else if (!isItemOverInternal && isOverMainGrid) {
-                        // Move to main grid — lowest priority, only when not over overlay targets
-                        const { row: newRow, col: newCol } = clampPosition(
+                      } else if (isOverMainGrid) {
+                        // Item entirely outside internal grid and cursor is over main grid — move to main grid
+                        const { row: mainRow, col: mainCol } = clampPosition(
                           Math.round((clientY - mainGridRect.top - dragOffset.y) / subCellSize),
                           Math.round((clientX - mainGridRect.left - dragOffset.x) / subCellSize),
                           bounds, GRID_SUB_ROWS, GRID_SUB_COLS
@@ -2152,11 +2141,11 @@
                           ...c,
                           internalGrid: c.internalGrid.filter(i => i.id !== draggedItem),
                           currentWeight: c.emptyWeight + calculateInternalWeight(c) - draggedInternalItem.weight + calculateExternalWeight(c)
-                        } : c).concat([{ ...draggedInternalItem, position: { row: newRow, col: newCol } }])
+                        } : c).concat([{ ...draggedInternalItem, position: { row: mainRow, col: mainCol } }])
                         );
                         itemWasHandled = true;
                       } else {
-                        // Dropped outside all valid targets — snap back
+                        // Entirely outside all valid targets — snap back
                         setPlacedItems(prev => prev.map(c => {
                           if (c.id !== openContainerId) return c;
                           return {
@@ -2210,18 +2199,16 @@
                         itemWasHandled = true;
                       }
                     } else {
-                      // Not over a slot — check if item body lands in internal grid
+                      // Not over a slot — check if item body has overlap with internal grid
                       const shape = getScaledContainerShape(item);
                       const bounds = getShapeBounds(shape);
-                      const anchorCol = Math.round((clientX - internalRect.left - dragOffset.x) / subCellSize);
-                      const anchorRow = Math.round((clientY - internalRect.top - dragOffset.y) / subCellSize);
-                      const itemLeft   = internalRect.left + (anchorCol + bounds.minCol) * subCellSize;
-                      const itemRight  = internalRect.left + (anchorCol + bounds.maxCol + 1) * subCellSize;
-                      const itemTop    = internalRect.top  + (anchorRow + bounds.minRow) * subCellSize;
-                      const itemBottom = internalRect.top  + (anchorRow + bounds.maxRow + 1) * subCellSize;
-                      const isItemOverInternal = itemLeft >= internalRect.left && itemRight <= internalRect.right &&
-                                                 itemTop >= internalRect.top && itemBottom <= internalRect.bottom;
-                      if (isItemOverInternal && container) {
+                      const { subRows: internalSubRows, subCols: internalSubCols } = getInternalDimensions(container);
+                      const { row: intRow, col: intCol,
+                              isOutOfBounds: intOOB, isEntirelyOutOfBounds: intEntirelyOOB } = resolveDropPosition(
+                        clientX, clientY, dragOffset, internalRect, subCellSize, bounds, internalSubRows, internalSubCols
+                      );
+                      if (!intEntirelyOOB && container) {
+                        // Has overlap with internal grid — validate, then place (clamped if partially outside)
                         if (item.id === openContainerId) {
                           alert('Cannot place a container inside itself!');
                           setPlacedItems(prev => prev.map(i =>
@@ -2237,15 +2224,14 @@
                             ));
                             itemWasHandled = true;
                           } else {
-                            const { subRows: internalSubRows, subCols: internalSubCols } = getInternalDimensions(container);
-                            const { row: newRow, col: newCol } = clampPosition(
-                              anchorRow, anchorCol, bounds, internalSubRows, internalSubCols
-                            );
+                            const { row: finalRow, col: finalCol } = intOOB
+                              ? clampPosition(intRow, intCol, bounds, internalSubRows, internalSubCols)
+                              : { row: intRow, col: intCol };
                             setPlacedItems(prev => prev
                               .filter(p => p.id !== draggedItem)
                               .map(c => c.id === openContainerId ? {
                                 ...c,
-                                internalGrid: [...c.internalGrid, { ...item, position: { row: newRow, col: newCol } }],
+                                internalGrid: [...c.internalGrid, { ...item, position: { row: finalRow, col: finalCol } }],
                                 currentWeight: c.emptyWeight + internalWeight + item.weight + calculateExternalWeight(c)
                               } : c)
                             );
@@ -2253,7 +2239,7 @@
                           }
                         }
                       }
-                      // If neither slot nor internal grid — fall through to main grid fallback below
+                      // If entirely outside internal grid — fall through to main grid fallback below
                     }
                   }
                 }
@@ -2780,11 +2766,18 @@
 
                             const dragShape  = getScaledContainerShape(activeItem);
                             const dragBounds = getShapeBounds(dragShape);
+                            // For slot drags dragOffset is {0,0} so position comes from cursor, not item.position
+                            const initRow = draggedFromSlotRef.current !== -1
+                                ? Math.round((clientY - activationRect.top)  / subCellSize)
+                                : activeItem.position.row;
+                            const initCol = draggedFromSlotRef.current !== -1
+                                ? Math.round((clientX - activationRect.left) / subCellSize)
+                                : activeItem.position.col;
                             const visual = {
                                 item:   activeItem,
                                 shape:  dragShape,
                                 bounds: dragBounds,
-                                initialTransform: `translate(${activationRect.left + (activeItem.position.col + dragBounds.minCol) * subCellSize}px, ${activationRect.top + (activeItem.position.row + dragBounds.minRow) * subCellSize}px)`,
+                                initialTransform: `translate(${activationRect.left + (initCol + dragBounds.minCol) * subCellSize}px, ${activationRect.top + (initRow + dragBounds.minRow) * subCellSize}px)`,
                             };
                             dragVisualRef.current   = visual;
                             activeDragIdRef.current = draggedItem;
