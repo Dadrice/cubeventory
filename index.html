@@ -135,6 +135,16 @@
             return fillers;
         };
 
+        // Produces a short abbreviation for long item names used as a display fallback.
+        // Multi-word names become initials (skipping minor words); single words are truncated.
+        const ABBR_SKIP = new Set(['of', 'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'and', 'or']);
+        const abbreviateName = (name) => {
+            const words = name.trim().split(/\s+/);
+            if (words.length === 1) return name.length > 6 ? name.slice(0, 5) + '\u2026' : name;
+            const initials = words.filter((w, i) => i === 0 || !ABBR_SKIP.has(w.toLowerCase())).map(w => w[0].toUpperCase());
+            return initials.length >= 2 ? initials.join('.') + '.' : name.slice(0, 5) + '\u2026';
+        };
+
         // Renders the item name/quantity text overlay at pre-computed absolute pixel positions.
         // wrapTopPx / wrapLeftPx are in whatever coordinate space the containing element uses.
         const renderTextOverlay = (textDisplay, wrapTopPx, wrapLeftPx, itemWidth, itemHeight, subCellSz, cellSz, zIndex = 1) => {
@@ -250,7 +260,8 @@
                 }
                 return saved?.placedItems || [];
             });
-            const [isCreatingItem, setIsCreatingItem] = useState(false);
+            const [isCreatingItem,    setIsCreatingItem]    = useState(false);
+            const [confirmLibraryEdit, setConfirmLibraryEdit] = useState(false);
             const [editingItemId,  setEditingItemId]  = useState(null);
             const [newItemName, setNewItemName] = useState('');
             const [newItemWeight, setNewItemWeight] = useState('');
@@ -258,7 +269,7 @@
             const [newItemFilledWeight, setNewItemFilledWeight] = useState('');
             const [newItemMaxUnits, setNewItemMaxUnits] = useState('');
             const [newItemShape, setNewItemShape] = useState([]);
-            const [newItemType, setNewItemType] = useState('weapon');
+            const [newItemType, setNewItemType] = useState('melee weapon');
             const [newItemColor, setNewItemColor] = useState('#3B82F6');
             const [newItemScaleDirection, setNewItemScaleDirection] = useState('vertical');
             const [newItemNotes,   setNewItemNotes]   = useState('');
@@ -330,6 +341,17 @@
                 }
                 return saved?.setAsideItems || [];
             });
+            const [weightlessItems, setWeightlessItems] = useState(() => {
+                const saved = loadAutoSave();
+                if (saved?.characters?.length > 0) {
+                    const aid = saved.activeCharacterId || saved.characters[0].id;
+                    const ac = saved.characters.find(c => c.id === aid) || saved.characters[0];
+                    return ac.weightlessItems || [];
+                }
+                return [];
+            });
+            const [showWeightlessItems, setShowWeightlessItems] = useState(false);
+            const [weightlessQty, setWeightlessQty] = useState({});
             const [showStartup,      setShowStartup]      = useState(() => !loadAutoSave());
             const [showBackups,      setShowBackups]      = useState(false);
             const [selectionColor,   setSelectionColor]   = useState(() => localStorage.getItem('cubeventory_sel_color') || '#84cc16');
@@ -362,7 +384,7 @@
             const [libraryCollapsed, setLibraryCollapsed] = useState(true);
             const [librarySearch, setLibrarySearch] = useState('');
             const [librarySortKey, setLibrarySortKey] = useState('name-asc'); // 'name-asc'|'name-desc'|'weight-asc'|'weight-desc'
-            const [libraryCategoryFilter, setLibraryCategoryFilter] = useState('all'); // 'all'|'armor'|'weapon'|'supply'|'tool'|'container'|'potion'
+            const [libraryCategoryFilter, setLibraryCategoryFilter] = useState('all'); // 'all'|'armor'|'melee weapon'|'ranged weapon'|'firearm'|'ammunition'|'explosive'|'supply'|'tool'|'foci'|'clothing'|'container'|'potion'
             const [libraryMaxRows,       setLibraryMaxRows]       = useState(10);
 
             const [newItemItemWeight,           setNewItemItemWeight]           = useState('');
@@ -433,10 +455,14 @@
 
             const ITEM_TYPES = {
                 armor: { name: 'Armor', color: '#4B5563' },
-                weapon: { name: 'Weapon', color: '#9CA3AF' },
+                'melee weapon': { name: 'Melee Weapon', color: '#9CA3AF' },
+                'ranged weapon': { name: 'Ranged Weapon', color: '#7D6D68' },
+                firearm: { name: 'Firearm', color: '#6B7280' },
                 ammunition:  { name: 'Ammunition',  color: '#966426' },
+                explosive: { name: 'Explosive', color: '#F59E0B' },
                 supply: { name: 'Supply', color: '#FCD34D' },
                 tool: { name: 'Tool', color: '#FC8D4D'},
+                foci: { name: 'Spellcasting Focus', color: '#A78BFA' },
                 clothing:  { name: 'Clothing',  color: '#E879F9' },
                 container: { name: 'Container', color: '#92400E' },
                 potion: { name: 'Potion', color: '#3B82F6' }
@@ -567,13 +593,17 @@
                 }
               } else {
                 weight = parseFloat(newItemWeight);
-                if (!newItemName || isNaN(weight) || weight <= 0) return;
+                if (!newItemName || isNaN(weight) || weight < 0) return;
               }
 
-              const targetSubCells = calcTargetSubCells();
-              if (newItemShape.length !== targetSubCells) return;
+              // 0-weight items need no shape — they live in the Weightless Items list, not the grid.
+              const isWeightlessItem = weight === 0;
+              if (!isWeightlessItem) {
+                const targetSubCells = calcTargetSubCells();
+                if (newItemShape.length !== targetSubCells) return;
+              }
 
-              const sortedShape = [...newItemShape].sort((a, b) => {
+              const sortedShape = isWeightlessItem ? [] : [...newItemShape].sort((a, b) => {
                 const [ar, ac] = a.split(',').map(Number);
                 const [br, bc] = b.split(',').map(Number);
                 return ar !== br ? ar - br : ac - bc;
@@ -626,7 +656,7 @@
                 setNewItemFilledWeight('');
                 setNewItemMaxUnits('');
                 setNewItemShape([]);
-                setNewItemType('weapon');
+                setNewItemType('melee weapon');
                 setNewItemColor('#3B82F6');
                 setNewItemScaleDirection('vertical');
                 setNewItemContainerSubtype('quantity');
@@ -1257,14 +1287,32 @@
                 setSelectedItemId(null);
             };
 
+            // Adds an item to the weightless list, stacking by name.
+            const addToWeightless = (itemTemplate, qty = 1) => {
+                setWeightlessItems(prev => {
+                    const existing = prev.find(e => e.name === itemTemplate.name);
+                    if (existing) return prev.map(e => e.name === itemTemplate.name ? { ...e, qty: e.qty + qty } : e);
+                    const { id: _id, position: _pos, setAsideId: _sa, qty: _q, ...fields } = itemTemplate;
+                    return [...prev, { ...fields, id: Date.now() + Math.random(), weight: 0, qty }];
+                });
+            };
+
             const pickUpItem = (itemId) => {
                 const item = setAsideItems.find(i => i.id === itemId);
                 if (!item) return;
+                if (item.weight === 0) {
+                    addToWeightless(item);
+                    setSetAsideItems(prev => prev.filter(i => i.id !== itemId));
+                    return;
+                }
                 const { setAsideId: _, ...itemWithoutSetAsideId } = item;
                 setPlacementMode({ item: itemWithoutSetAsideId, source: 'setAside', setAsideId: itemId });
             };
 
             const addItemToGrid = (itemTemplate, targetContainerId = null) => {
+              // 0-weight items cannot exist on the grid; route them to the weightless list.
+              if (itemTemplate.weight === 0) { addToWeightless(itemTemplate); return; }
+
               const newPlaced = {
                 ...itemTemplate,
                 id: Date.now() + Math.random(),
@@ -1298,6 +1346,48 @@
                 setPlacementMode({ item: newPlaced, source: 'library' });
                 setSelectedItemId(null);
               }
+            };
+
+            const setDownWeightless = (entryId, qty) => {
+                const entry = weightlessItems.find(e => e.id === entryId);
+                if (!entry) return;
+                const n = Math.min(qty, entry.qty);
+                if (n <= 0) return;
+                const newItems = Array.from({ length: n }, (_, i) => ({
+                    ...entry,
+                    id: Date.now() + Math.random() + i,
+                    qty: undefined,
+                    setAsideId: `sa_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+                }));
+                setSetAsideItems(prev => [...prev, ...newItems]);
+                setWeightlessItems(prev => {
+                    const remaining = entry.qty - n;
+                    if (remaining <= 0) return prev.filter(e => e.id !== entryId);
+                    return prev.map(e => e.id === entryId ? { ...e, qty: remaining } : e);
+                });
+                setWeightlessQty(prev => ({ ...prev, [entryId]: 1 }));
+            };
+
+            const sendWeightlessItem = (entryId, qty) => {
+                const entry = weightlessItems.find(e => e.id === entryId);
+                if (!entry) return;
+                const n = Math.min(qty, entry.qty);
+                if (n <= 0) return;
+                const { qty: _q, ...itemFields } = entry;
+                for (let i = 0; i < n; i++) {
+                    const item = { ...itemFields, id: Date.now() + Math.random() + i };
+                    setTransferQueue(prev => [...prev, {
+                        qid: `tq_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                        source: 'library',
+                        item
+                    }]);
+                }
+                setWeightlessItems(prev => {
+                    const remaining = entry.qty - n;
+                    if (remaining <= 0) return prev.filter(e => e.id !== entryId);
+                    return prev.map(e => e.id === entryId ? { ...e, qty: remaining } : e);
+                });
+                setWeightlessQty(prev => ({ ...prev, [entryId]: 1 }));
             };
 
             const getEncumbranceZone = (col) => {
@@ -1920,7 +2010,7 @@
               const maxFontSize = Math.min(32, Math.max(8, Math.floor(cellSize - (paddingPx * 2))));
 
               // Very small items - use minimal text
-              if (availWidth < 20 || availHeight < 20) {
+              if (availWidth < 4 || availHeight < 4) {
                 return {
                   fontSize: 0, // Don't show text
                   texts: [],
@@ -2031,10 +2121,10 @@
               let fontSize = 0;
               let orientation = 'horizontal';
 
-              const computeMaxFontHorizontal = (availW, availH, maxLines = 2, preferNameFirst = true) => {
+              const computeMaxFontHorizontal = (availW, availH, maxLines = 2, nameOverride = null) => {
                 const charWidthFactor = 0.52; // tighter avg char width relative to font-size
                 const lineHeightFactor = 1.12;
-                const primary = nameText || '';
+                const primary = nameOverride !== null ? nameOverride : (nameText || '');
                 const secondary = quantityText || '';
 
                 for (let f = maxFontSize; f >= minFontSize; f--) {
@@ -2074,6 +2164,8 @@
                         }
                       }
                       if (!splitFound) {
+                        // Never hyphenate single-word names — prefer a smaller clean font via continued iteration.
+                        if (words.length <= 1) { continue; }
                         // Only attempt character hyphenation when ≥2 chars fit per line;
                         // prevents "1-/1" style splits for short text in narrow columns.
                         if (charsPerLine <= 1) { continue; }
@@ -2147,10 +2239,34 @@
                 }
               }
 
+              // Smart cy for horizontal text:
+              // • Rectangle-like shapes (every non-empty row qualifies for centeredHoriz, i.e. all rows
+              //   are within 75% of the widest run): use centroid-based _meanCy = visual centre.
+              // • Cross/T-shaped items (some rows are narrower than the threshold and fail to qualify):
+              //   snap cy to the FULL-CELL centre of centeredHoriz.row so text is centred within the
+              //   crossbar, not pulled off-centre by the spine's mass.
+              const _meanCy = (_meanR + 0.5) * subCellSize;
+              let _allRowsQualify = true;
+              for (let _r = 0; _r < height; _r++) {
+                let _rowMax = 0, _run = 0;
+                for (let _c = 0; _c < width; _c++) {
+                  if (grid[_r][_c]) { _run++; } else { _rowMax = Math.max(_rowMax, _run); _run = 0; }
+                }
+                _rowMax = Math.max(_rowMax, _run);
+                if (_rowMax > 0 && _rowMax < horizThreshold) { _allRowsQualify = false; break; }
+              }
+              const _horizCy = _allRowsQualify
+                  ? _meanCy
+                  : (Math.floor(centeredHoriz.row / SUB_DIVISIONS) + 0.5) * cellSize;
+              // Vertical-column text width capped to the item's actual sub-cell width so the text
+              // box never overflows on 1-sub-cell-wide items (e.g. 0.25-lb single-sub-cell items).
+              const _vertLen = Math.min(SUB_DIVISIONS, width);
+              const _vertCx  = Math.max(_vertLen / 2, Math.min(width - _vertLen / 2, _meanC + 0.5)) * subCellSize;
+
               // Pick best candidate: largest font wins; ties favour this order: horiz > vert > vert-rot > pca
               const _candidates = [
-                { font: horizResult.font,  lines: horizResult.lines,  hint: { type: 'rotated', cx: Math.max(centeredHoriz.len / 2, Math.min(width - centeredHoriz.len / 2, _meanC + 0.5)) * subCellSize, cy: (_meanR + 0.5) * subCellSize, len: centeredHoriz.len, angle: 0 }, orientation: 'horizontal' },
-                { font: vertResult.font,   lines: vertResult.lines,   hint: { type: 'rotated', cx: Math.max(SUB_DIVISIONS / 2, Math.min(width - SUB_DIVISIONS / 2, _meanC + 0.5)) * subCellSize, cy: (_meanR + 0.5) * subCellSize, len: SUB_DIVISIONS, angle: 0 }, orientation: 'vertical' },
+                { font: horizResult.font,  lines: horizResult.lines,  hint: { type: 'rotated', cx: Math.max(centeredHoriz.len / 2, Math.min(width - centeredHoriz.len / 2, _meanC + 0.5)) * subCellSize, cy: _horizCy, len: centeredHoriz.len, angle: 0 }, orientation: 'horizontal' },
+                { font: vertResult.font,   lines: vertResult.lines,   hint: { type: 'rotated', cx: _vertCx, cy: (_meanR + 0.5) * subCellSize, len: _vertLen, angle: 0 }, orientation: 'vertical' },
                 vertRotHint ? { font: vertRotResult.font, lines: vertRotResult.lines, hint: vertRotHint, orientation: 'horizontal' } : null,
                 pcaHint     ? { font: pcaResult.font,    lines: pcaResult.lines,    hint: pcaHint,     orientation: 'horizontal' } : null,
               ].filter(Boolean);
@@ -2160,6 +2276,26 @@
                 positionHint = _best.hint;
                 orientation = _best.orientation;
                 if (_best.lines.length) displayLines = _best.lines;
+              }
+
+              // Abbreviation fallback: if full name only fit at minimum size (or not at all), retry with
+              // initials/truncation — abbreviation is only applied if it produces a strictly larger font.
+              if (fontSize <= minFontSize) {
+                const abbrName = abbreviateName(nameText);
+                if (abbrName !== nameText) {
+                  const abbrH = computeMaxFontHorizontal((centeredHoriz.len || 1) * subCellSize - paddingPx * 2, cellSize - paddingPx * 2, 2, abbrName);
+                  const abbrV = computeMaxFontHorizontal(cellSize - paddingPx * 2, (bestVert.len || 1) * subCellSize - paddingPx * 2, 2, abbrName);
+                  const abbrCands = [
+                    abbrH.font > 0 ? { font: abbrH.font, lines: abbrH.lines, hint: { type: 'rotated', cx: Math.max(centeredHoriz.len / 2, Math.min(width - centeredHoriz.len / 2, _meanC + 0.5)) * subCellSize, cy: _horizCy, len: centeredHoriz.len, angle: 0 } } : null,
+                    abbrV.font > 0 ? { font: abbrV.font, lines: abbrV.lines, hint: { type: 'rotated', cx: _vertCx, cy: (_meanR + 0.5) * subCellSize, len: _vertLen, angle: 0 } } : null,
+                  ].filter(Boolean);
+                  const abbrBest = abbrCands.reduce((b, c) => c.font > b.font ? c : b, { font: 0 });
+                  if (abbrBest.font > fontSize) {
+                    fontSize = abbrBest.font;
+                    positionHint = abbrBest.hint;
+                    displayLines = abbrBest.lines;
+                  }
+                }
               }
 
               if (fontSize < minFontSize) {
@@ -2400,7 +2536,7 @@
                     }));
                 }, 1500);
                 return () => clearTimeout(autoSaveTimerRef.current);
-            }, [characterName, strength, characterClass, items, placedItems, setAsideItems, characters, activeCharacterId, showStartup, myAttunements]);
+            }, [characterName, strength, characterClass, items, placedItems, setAsideItems, weightlessItems, characters, activeCharacterId, showStartup, myAttunements]);
 
             // Immediate save + backup snapshot when page goes to background (mobile tab-switch / back-swipe)
             useEffect(() => {
@@ -2420,7 +2556,7 @@
                 };
                 document.addEventListener('visibilitychange', onHide);
                 return () => document.removeEventListener('visibilitychange', onHide);
-            }, [characterName, strength, characterClass, items, placedItems, setAsideItems, characters, activeCharacterId, showStartup, myAttunements]);
+            }, [characterName, strength, characterClass, items, placedItems, setAsideItems, weightlessItems, characters, activeCharacterId, showStartup, myAttunements]);
 
             // Reset coin overlay state whenever the coinpurse overlay is closed or switched
             useEffect(() => {
@@ -2595,16 +2731,18 @@
                                 setStrength(ac.strength || 10);
                                 setPlacedItems(ac.placedItems || []);
                                 setSetAsideItems(ac.setAsideItems || []);
+                                setWeightlessItems(ac.weightlessItems || []);
                             } else {
                                 // v1 format
                                 setItems(data.items || []);
-                                const char = { id: DEFAULT_CHAR_ID, name: data.characterName || '', strength: data.strength || 10, placedItems: data.placedItems || [], setAsideItems: data.setAsideItems || [] };
+                                const char = { id: DEFAULT_CHAR_ID, name: data.characterName || '', strength: data.strength || 10, placedItems: data.placedItems || [], setAsideItems: data.setAsideItems || [], weightlessItems: [] };
                                 setCharacters([char]);
                                 setActiveCharacterId(DEFAULT_CHAR_ID);
                                 setCharacterName(char.name);
                                 setStrength(char.strength);
                                 setPlacedItems(char.placedItems);
                                 setSetAsideItems(char.setAsideItems);
+                                setWeightlessItems([]);
                             }
                             setOpenContainerId(null);
                             setOpenCoinpurseId(null);
@@ -2630,15 +2768,17 @@
                     setStrength(ac.strength || 10);
                     setPlacedItems(ac.placedItems || []);
                     setSetAsideItems(ac.setAsideItems || []);
+                    setWeightlessItems(ac.weightlessItems || []);
                 } else {
                     setItems(backup.items || []);
-                    const char = { id: DEFAULT_CHAR_ID, name: backup.characterName || '', strength: backup.strength || 10, placedItems: backup.placedItems || [], setAsideItems: backup.setAsideItems || [] };
+                    const char = { id: DEFAULT_CHAR_ID, name: backup.characterName || '', strength: backup.strength || 10, placedItems: backup.placedItems || [], setAsideItems: backup.setAsideItems || [], weightlessItems: [] };
                     setCharacters([char]);
                     setActiveCharacterId(DEFAULT_CHAR_ID);
                     setCharacterName(char.name);
                     setStrength(char.strength);
                     setPlacedItems(char.placedItems);
                     setSetAsideItems(char.setAsideItems);
+                    setWeightlessItems([]);
                 }
                 setOpenContainerId(null);
                 setOpenCoinpurseId(null);
@@ -2648,17 +2788,17 @@
 
             const startFresh = () => {
                 setItems([]);
-                setCharacters([{ id: DEFAULT_CHAR_ID, name: '', strength: 10, characterClass: [], placedItems: [], setAsideItems: [], myAttunements: [] }]);
+                setCharacters([{ id: DEFAULT_CHAR_ID, name: '', strength: 10, characterClass: [], placedItems: [], setAsideItems: [], weightlessItems: [], myAttunements: [] }]);
                 setActiveCharacterId(DEFAULT_CHAR_ID);
                 setCharacterName(''); setStrength(10); setCharacterClass([]);
-                setPlacedItems([]); setSetAsideItems([]); setMyAttunements([]);
+                setPlacedItems([]); setSetAsideItems([]); setWeightlessItems([]); setMyAttunements([]);
                 setShowStartup(false);
             };
 
             // Returns the characters array with the active character's current state patched in (for saving)
             const getCharactersForSave = () =>
                 characters.map(c => c.id === activeCharacterId
-                    ? { ...c, name: characterName, strength, characterClass, placedItems, setAsideItems, myAttunements }
+                    ? { ...c, name: characterName, strength, characterClass, placedItems, setAsideItems, weightlessItems, myAttunements }
                     : c
                 );
 
@@ -2666,7 +2806,7 @@
                 if (charId === activeCharacterId) return;
                 // Persist current char state into the array before switching
                 setCharacters(prev => prev.map(c => c.id === activeCharacterId
-                    ? { ...c, name: characterName, strength, characterClass, placedItems, setAsideItems, myAttunements }
+                    ? { ...c, name: characterName, strength, characterClass, placedItems, setAsideItems, weightlessItems, myAttunements }
                     : c
                 ));
                 const newChar = characters.find(c => c.id === charId);
@@ -2676,6 +2816,7 @@
                 setCharacterClass(normaliseClass(newChar.characterClass));
                 setPlacedItems(newChar.placedItems);
                 setSetAsideItems(newChar.setAsideItems);
+                setWeightlessItems(newChar.weightlessItems || []);
                 setMyAttunements(validAttunements(newChar.myAttunements));
                 setActiveCharacterId(charId);
                 setTransferQueue([]);
@@ -2686,17 +2827,18 @@
 
             const createNewCharacter = () => {
                 const updatedChars = characters.map(c => c.id === activeCharacterId
-                    ? { ...c, name: characterName, strength, characterClass, placedItems, setAsideItems, myAttunements }
+                    ? { ...c, name: characterName, strength, characterClass, placedItems, setAsideItems, weightlessItems, myAttunements }
                     : c
                 );
                 const newId = `char_${Date.now()}`;
-                const newChar = { id: newId, name: '', strength: 10, characterClass: [], placedItems: [], setAsideItems: [], myAttunements: [] };
+                const newChar = { id: newId, name: '', strength: 10, characterClass: [], placedItems: [], setAsideItems: [], weightlessItems: [], myAttunements: [] };
                 setCharacters([...updatedChars, newChar]);
                 setCharacterName('');
                 setStrength(10);
                 setCharacterClass([]);
                 setPlacedItems([]);
                 setSetAsideItems([]);
+                setWeightlessItems([]);
                 setMyAttunements([]);
                 setActiveCharacterId(newId);
                 setOpenContainerId(null);
@@ -2722,10 +2864,10 @@
                 }, 8000);
                 if (remainingChars.length === 0) {
                     const newId = `char_${Date.now()}`;
-                    const newChar = { id: newId, name: '', strength: 10, placedItems: [], setAsideItems: [] };
+                    const newChar = { id: newId, name: '', strength: 10, placedItems: [], setAsideItems: [], weightlessItems: [] };
                     setCharacters([newChar]);
                     setCharacterName(''); setStrength(10);
-                    setPlacedItems([]); setSetAsideItems([]);
+                    setPlacedItems([]); setSetAsideItems([]); setWeightlessItems([]);
                     setActiveCharacterId(newId);
                 } else {
                     const nextChar = remainingChars[0];
@@ -2734,6 +2876,7 @@
                     setStrength(nextChar.strength);
                     setPlacedItems(nextChar.placedItems);
                     setSetAsideItems(nextChar.setAsideItems);
+                    setWeightlessItems(nextChar.weightlessItems || []);
                     setActiveCharacterId(nextChar.id);
                 }
                 setOpenContainerId(null);
@@ -2748,7 +2891,7 @@
                 const charToRestore = deletedChars[deletedChars.length - 1];
                 setDeletedChars([]);
                 const updatedChars = characters.map(c => c.id === activeCharacterId
-                    ? { ...c, name: characterName, strength, placedItems, setAsideItems }
+                    ? { ...c, name: characterName, strength, placedItems, setAsideItems, weightlessItems }
                     : c
                 );
                 setCharacters([...updatedChars, charToRestore]);
@@ -2756,6 +2899,7 @@
                 setStrength(charToRestore.strength);
                 setPlacedItems(charToRestore.placedItems);
                 setSetAsideItems(charToRestore.setAsideItems);
+                setWeightlessItems(charToRestore.weightlessItems || []);
                 setActiveCharacterId(charToRestore.id);
                 setOpenContainerId(null);
                 setOpenCoinpurseId(null);
@@ -3469,7 +3613,7 @@
                                         </button>
                                         <input ref={fileInputRef} type="file" accept=".json" onChange={importData} className="hidden" />
                                     </div>
-                                    <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-white cursor-pointer select-none mt-1">
+                                    <label className="inline-flex items-center gap-1.5 text-sm text-gray-600 dark:text-white cursor-pointer select-none mt-1 w-fit">
                                         Selection Highlight Color:
                                         <input type="color" value={selectionColor} onChange={(e) => { setSelectionColor(e.target.value); localStorage.setItem('cubeventory_sel_color', e.target.value); }} className="w-7 h-7 rounded cursor-pointer border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 p-0.5" />
                                     </label>
@@ -3617,6 +3761,9 @@
                               ) : (
                                 <input value={newItemWeight} onChange={(e) => setNewItemWeight(e.target.value)} placeholder="Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
                               )}
+                                {parseFloat(newItemWeight) === 0 && newItemType !== 'container' ? (
+                                  <p className="text-xs text-gray-400 italic mb-2">0-weight items don't need a shape — they go straight to the Weightless Items list.</p>
+                                ) : (
                                 <>
                                   <div className="mb-2">
                                     <label className="block text-sm font-medium mb-1">Creation Grid Scale: {(creationGridScale * 100).toFixed(0)}%</label>
@@ -3688,8 +3835,9 @@
                                     ))}
                                 </div>
                                 </>
+                                )}
                                 <div className="flex gap-2">
-                                    <button onClick={saveNewItem} disabled={newItemShape.length !== targetSubCells || !newItemName} className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-300">{editingItemId ? 'Save Changes' : 'Save Item'}</button>
+                                    <button onClick={() => editingItemId ? setConfirmLibraryEdit(true) : saveNewItem()} disabled={(parseFloat(newItemWeight) !== 0 && newItemShape.length !== targetSubCells) || !newItemName} className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-300">{editingItemId ? 'Save Changes' : 'Save Item'}</button>
                                     <button onClick={() => { setIsCreatingItem(false); resetItemCreation(); }} className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Cancel</button>
                                 </div>
                             </>
@@ -3719,7 +3867,7 @@
 
                                     {/* Category filter */}
                                     <div className="flex gap-1 mt-2 flex-wrap">
-                                        {['all', 'armor', 'weapon', 'supply', 'tool', 'container', 'potion'].map(cat => (
+                                        {['all', 'armor', 'melee weapon', 'ranged weapon', 'firearm', 'ammunition', 'explosive', 'supply', 'tool', 'foci', 'clothing', 'container', 'potion'].map(cat => (
                                             <button
                                                 key={cat}
                                                 onClick={() => setLibraryCategoryFilter(cat)}
@@ -3826,10 +3974,14 @@
                                         className="flex items-center justify-center gap-1 bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600">
                                         Recycle Bin <Trash2 size={12} />
                                     </button>
+                                    <button onClick={() => setShowWeightlessItems(v => !v)}
+                                        className={`col-span-2 flex items-center justify-center gap-1 px-3 py-1 rounded text-xs ${showWeightlessItems ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'}`}>
+                                        Weightless Items {weightlessItems.length > 0 && <span className={`rounded-full w-4 h-4 flex items-center justify-center font-bold text-xs ${showWeightlessItems ? 'bg-white text-purple-600' : 'bg-purple-600 text-white'}`}>{weightlessItems.reduce((s, e) => s + e.qty, 0)}</span>}
+                                    </button>
                                 </div>
                             </div>
                             <p className="text-xs text-gray-600 mb-2">Tap to select/rotate. Drag selected item to move. Two-finger drag without item selected to pan.</p>
-                            <div ref={gridContainerRef} className="overflow-auto" style={{ touchAction: 'none' }}>
+                            <div ref={gridContainerRef} className="overflow-auto" style={{ touchAction: 'none', paddingBottom: subCellSize * 1.5 }}>
                                 <div ref={gridRef} className="relative inline-block" onMouseDown={handleBackgroundPointerDown} onTouchStart={handleBackgroundPointerDown}>
                                     {(() => {
                                         const occupancy = {};
@@ -3958,7 +4110,7 @@
                                                         const hasAttune = item.requiresAttunement;
                                                         const hasNotes = !!(item.notes && item.notes.trim());
                                                         if (!hasAttune && !hasNotes) return null;
-                                                        const bs = Math.max(10, Math.floor(subCellSize * 0.69));
+                                                        const bs = Math.max(10, Math.floor(subCellSize * 0.5));
                                                         const inset = 2;
                                                         const gap = 1;
                                                         const anchor = getBadgeAnchor(shape, bounds, 'top-right');
@@ -4024,6 +4176,48 @@
                                         </div>
                                     ))}
                                 </div>
+                            </div>
+                        )}
+
+                        {showWeightlessItems && (
+                            <div className="bg-white dark:bg-gray-800 p-3 rounded-lg shadow mt-3">
+                                <h2 className="text-lg font-bold mb-2 text-purple-700">Weightless Items</h2>
+                                {weightlessItems.length === 0 ? (
+                                    <p className="text-xs text-gray-400 italic">No weightless items carried.</p>
+                                ) : (
+                                    <div className="flex flex-col gap-2">
+                                        {weightlessItems.map(entry => {
+                                            const qty = weightlessQty[entry.id] ?? 1;
+                                            const canAdjust = entry.qty > 1;
+                                            return (
+                                                <div key={entry.id} className="flex items-center gap-2 flex-wrap">
+                                                    <div className="flex-shrink-0 rounded" style={{ width: 16, height: 16, backgroundColor: entry.color }} />
+                                                    <span className="flex-1 text-sm min-w-0">
+                                                        {entry.name}
+                                                        {entry.qty > 1 && <span className="text-purple-600 font-semibold ml-1">×{entry.qty}</span>}
+                                                    </span>
+                                                    {canAdjust && (
+                                                        <div className="flex items-center gap-1 flex-shrink-0">
+                                                            <button onClick={() => setWeightlessQty(prev => ({ ...prev, [entry.id]: Math.max(1, (prev[entry.id] ?? 1) - 1) }))}
+                                                                className="w-5 h-5 flex items-center justify-center bg-gray-400 rounded text-xs hover:bg-gray-300">−</button>
+                                                            <span className="text-sm w-5 text-center">{qty}</span>
+                                                            <button onClick={() => setWeightlessQty(prev => ({ ...prev, [entry.id]: Math.min(entry.qty, (prev[entry.id] ?? 1) + 1) }))}
+                                                                className="w-5 h-5 flex items-center justify-center bg-gray-400 rounded text-xs hover:bg-gray-300">+</button>
+                                                        </div>
+                                                    )}
+                                                    <button onClick={() => setDownWeightless(entry.id, qty)}
+                                                        className="bg-orange-500 text-white px-2 py-1 rounded text-xs hover:bg-orange-600 flex-shrink-0">
+                                                        Set Down
+                                                    </button>
+                                                    <button onClick={() => sendWeightlessItem(entry.id, qty)}
+                                                        className="bg-teal-500 text-white px-2 py-1 rounded text-xs hover:bg-teal-600 flex-shrink-0">
+                                                        Send
+                                                    </button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
                         )}
 
@@ -4453,7 +4647,7 @@
                             {COIN_ROWS.map(({ key, label, color }) => (
                               <div key={key} className="flex items-center gap-2 mb-2">
                                 <div className="w-6 h-6 rounded-full flex-shrink-0 border border-gray-300 dark:border-gray-600" style={{ backgroundColor: color }} />
-                                <span className="text-sm font-medium w-6 flex-shrink-0">{label}</span>
+                                <span className="text-sm text-gray-700 font-medium w-6 flex-shrink-0">{label}</span>
                                 <button
                                   onClick={() => {
                                     const raw = window.prompt(`Remove how many ${label}? (have ${coins[key] || 0})`);
@@ -4477,7 +4671,7 @@
                                     if (isNaN(n) || n < 0) updateCoinpurseCoins(coinpurse.id, key, 0);
                                     setCoinDraft(prev => { const d = { ...prev }; delete d[key]; return d; });
                                   }}
-                                  className="coin-input flex-1 border rounded px-1 py-0.5 text-sm text-center"
+                                  className="coin-input flex-1 border rounded px-1 py-0.5 text-sm text-gray-700 text-center"
                                   style={{ minWidth: 0 }}
                                 />
                                 <button
@@ -4490,7 +4684,7 @@
                                 >+</button>
                               </div>
                             ))}
-                            <div className="border-t pt-2 mt-1 text-xs text-gray-500 dark:text-gray-400 text-right">
+                            <div className="border-t pt-2 mt-1 text-xs text-gray-500 text-right">
                               {numPouches} × {coinpurse.emptyWeight} lb {numPouches === 1 ? 'pouch' : 'pouches'} + {coinWeight.toFixed(2)} lbs coins = <strong>{totalWeight.toFixed(2)} lbs</strong>
                               {atCap && <div className="text-orange-600 font-medium mt-0.5">Please transfer {excessCoins} coins to another {coinpurse.name}</div>}
                             </div>
@@ -4513,7 +4707,7 @@
                             return (
                               <div className="flex flex-col gap-2">
                                 {/* From row */}
-                                <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">From — click to select &amp; pre-fill amount</div>
+                                <div className="text-xs text-gray-500 font-medium">From — click to select &amp; pre-fill amount</div>
                                 <div className="flex gap-1">
                                   {COIN_ROWS.map(({ key, label }) => {
                                     const isSelected = convertFrom === key;
@@ -4528,7 +4722,7 @@
                                         className={`flex-1 flex flex-col items-center py-1.5 rounded text-xs border transition-colors
                                           ${isSelected
                                             ? 'bg-amber-600 text-white border-amber-600'
-                                            : 'bg-white text-gray-700 dark:text-gray-300 border-gray-200 hover:bg-amber-50'}`}>
+                                            : 'bg-white text-gray-700 border-gray-200 hover:bg-amber-50'}`}>
                                         <span className="font-semibold leading-tight">{label}</span>
                                         <span className="leading-tight opacity-80">{q}</span>
                                       </button>
@@ -4537,20 +4731,20 @@
                                 </div>
                                 {/* Amount input */}
                                 <div className="flex items-center gap-2">
-                                  <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">Amount:</span>
+                                  <span className="text-xs text-gray-700 flex-shrink-0">Amount:</span>
                                   <input type="number" min="0"
                                     value={convertAmount}
                                     onChange={(e) => setConvertAmount(e.target.value)}
                                     placeholder={convertFrom ? `of ${convertFrom.toUpperCase()}` : 'select From first'}
                                     disabled={!convertFrom}
-                                    className="coin-input border rounded px-2 py-0.5 text-sm flex-1 min-w-0 disabled:bg-gray-50 dark:bg-gray-900 disabled:text-gray-400"
+                                    className="coin-input border rounded px-2 py-0.5 text-sm text-gray-700 flex-1 min-w-0 disabled:bg-gray-50 disabled:text-gray-400"
                                   />
                                   {convertFrom && n > have && (
                                     <span className="text-xs text-orange-500 flex-shrink-0">max {have}</span>
                                   )}
                                 </div>
                                 {/* To row */}
-                                <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">To — click to select target</div>
+                                <div className="text-xs text-gray-500 font-medium">To — click to select target</div>
                                 <div className="flex gap-1">
                                   {COIN_ROWS.map(({ key, label }) => {
                                     const isSameAsFrom = key === convertFrom;
@@ -4564,12 +4758,12 @@
                                         onClick={() => viable && setConvertTo(key)}
                                         className={`flex-1 flex flex-col items-center py-1.5 rounded text-xs border transition-colors
                                           ${isSameAsFrom
-                                            ? 'bg-gray-50 dark:bg-gray-900 text-gray-300 border-gray-100 cursor-not-allowed'
+                                            ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
                                             : isSelected
                                               ? 'bg-blue-500 text-white border-blue-500'
                                               : viable
-                                                ? 'bg-white text-gray-700 dark:text-gray-300 border-gray-200 hover:bg-blue-50 cursor-pointer'
-                                                : 'bg-gray-50 dark:bg-gray-900 text-gray-300 border-gray-100 cursor-not-allowed'}`}>
+                                                ? 'bg-white text-gray-700 border-gray-200 hover:bg-blue-50 cursor-pointer'
+                                                : 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'}`}>
                                         <span className="font-semibold leading-tight">{label}</span>
                                         <span className="leading-tight opacity-80">
                                           {isSameAsFrom ? '—' : rowToAmount === null ? '–' : rowToAmount}
@@ -4585,7 +4779,7 @@
                                 {/* Action buttons */}
                                 <div className="flex gap-2 mt-1">
                                   <button onClick={() => setCoinpurseView('manage')}
-                                    className="flex-1 border rounded py-1.5 text-sm hover:bg-gray-50 dark:bg-gray-900">Back</button>
+                                    className="flex-1 border rounded py-1.5 text-sm bg-gray-100 dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-600">Back</button>
                                   <button
                                     onClick={() => {
                                       if (!canConvert) return;
@@ -4594,7 +4788,7 @@
                                       setConvertAmount('');
                                     }}
                                     disabled={!canConvert}
-                                    className={`flex-1 rounded py-1.5 text-sm font-medium ${canConvert ? 'bg-amber-600 text-white hover:bg-amber-700' : 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-not-allowed'}`}
+                                    className={`flex-1 rounded py-1.5 text-sm font-medium ${canConvert ? 'bg-amber-600 text-white hover:bg-amber-700' : 'bg-gray-100 dark:bg-gray-800 cursor-not-allowed'}`}
                                   >Exchange</button>
                                 </div>
                               </div>
@@ -4607,14 +4801,14 @@
                     {placementMode && (
                         <div className="fixed bottom-0 left-0 right-0 bg-amber-50 border-t-2 border-amber-400 p-3 flex items-center gap-3 z-50">
                             <p className="flex-1 text-sm text-amber-800 font-medium">Tap the grid where you'd like to place <span className="font-bold">{placementMode.item.name}</span></p>
-                            <button onClick={() => setPlacementMode(null)} className="bg-gray-50 dark:bg-gray-9000 text-white px-3 py-2 rounded text-sm hover:bg-gray-600 flex-shrink-0">Cancel</button>
+                            <button onClick={() => setPlacementMode(null)} className="bg-gray-600 dark:bg-gray-700 text-white px-3 py-2 rounded text-sm hover:bg-gray-700 dark:hover:bg-gray-600 flex-shrink-0">Cancel</button>
                         </div>
                     )}
 
                     {selectedItem && !discardTarget && !placementMode && !editingNotes && !showNotesExpanded && (
                         <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-700 border-t-2 border-gray-300 dark:border-gray-600 px-3 pt-2 pb-3 flex flex-col gap-2 z-50">
                             <div className="text-center text-sm font-semibold text-gray-700 dark:text-gray-300 truncate px-2">
-                              {selectedItem.magical && <span className="text-purple-500 mr-1">✦</span>}{selectedItem.name}
+                              {selectedItem.magical && <span className="text-purple-500 mr-1">✦</span>}{selectedItem.name}{selectedItem.containerType === 'quantity' && <span className="text-gray-400 dark:text-gray-500 font-normal ml-1.5">{selectedItem.currentUnits} / {selectedItem.maxUnits}</span>}
                             </div>
                             {selectedItem.notes && (
                                 <div className="text-center text-xs text-gray-500 dark:text-gray-400 italic px-2 -mt-1 truncate">
@@ -4782,6 +4976,17 @@
                             </div>
                             <button onClick={() => setAttuneClassMsg(null)}
                                 className="bg-gray-50 dark:bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 dark:hover:bg-gray-700 w-full">Dismiss</button>
+                        </div>
+                    )}
+
+                    {confirmLibraryEdit && (
+                        <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t-2 border-amber-400 p-3 z-50">
+                            <p className="text-center font-medium text-sm mb-1">Save changes to <strong>{newItemName}</strong>?</p>
+                            <p className="text-center text-xs text-gray-500 dark:text-gray-400 mb-3">This will update the library definition. Already-placed copies are not affected.</p>
+                            <div className="flex gap-2">
+                                <button onClick={() => { saveNewItem(); setConfirmLibraryEdit(false); }} className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 flex-1">Save Changes</button>
+                                <button onClick={() => setConfirmLibraryEdit(false)} className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 flex-1">Cancel</button>
+                            </div>
                         </div>
                     )}
 
