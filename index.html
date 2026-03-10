@@ -301,6 +301,7 @@
             const lastPaintedRef    = useRef(null);
             const autoSaveTimerRef  = useRef(null);
             const deleteUndoTimerRef = useRef(null);
+            const defaultLibraryRef  = useRef([]);
             const qrCodeRef      = useRef(null);
             const qrInstanceRef  = useRef(null);
             const videoRef       = useRef(null);
@@ -385,10 +386,17 @@
             const [librarySearch, setLibrarySearch] = useState('');
             const [librarySortKey, setLibrarySortKey] = useState('name-asc'); // 'name-asc'|'name-desc'|'weight-asc'|'weight-desc'
             const [libraryCategoryFilter, setLibraryCategoryFilter] = useState('all'); // 'all'|'armor'|'melee weapon'|'ranged weapon'|'firearm'|'ammunition'|'explosive'|'supply'|'tool'|'foci'|'clothing'|'container'|'potion'
+            const [transferSearch, setTransferSearch] = useState('');
+            const [transferCategoryFilter, setTransferCategoryFilter] = useState('all');
             const [libraryMaxRows,       setLibraryMaxRows]       = useState(10);
 
             const [newItemItemWeight,           setNewItemItemWeight]           = useState('');
             const [newItemCapacityPerUnit,      setNewItemCapacityPerUnit]      = useState('');
+            const [newItemFillMode,             setNewItemFillMode]             = useState('auto-drain'); // 'auto-drain'|'auto-fill'
+            const [newItemMaxFillWeight,        setNewItemMaxFillWeight]        = useState('');
+            const [newItemIncrementWeight,      setNewItemIncrementWeight]      = useState('');
+            const [newItemContentLabel,         setNewItemContentLabel]         = useState('');
+            const [quantityInputAmt,            setQuantityInputAmt]            = useState('1');
             const [newItemRequiresAttunement,   setNewItemRequiresAttunement]   = useState(false);
             const [newItemAttunementClasses,    setNewItemAttunementClasses]    = useState([]);
 
@@ -472,10 +480,17 @@
             // based on the current form state. Used during shape painting and validation.
             const calcTargetSubCells = () => {
                 const isContainer = newItemType === 'container';
+                // These subtypes auto-generate their shape — no painting required
+                if (isContainer && (
+                    newItemContainerSubtype === 'grid' ||
+                    newItemContainerSubtype === 'stacked' ||
+                    (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill')
+                )) return 0;
                 if (isContainer && newItemContainerSubtype === 'quantity') {
+                    // auto-drain: paint at full weight (empty + max contents)
                     return Math.ceil(((parseFloat(newItemBaseWeight) || 1) + (parseFloat(newItemFilledWeight) || 0)) * SUB_CELLS);
                 } else if (isContainer) {
-                    // grid and coinpurse paint shape from empty/base weight only
+                    // coinpurse: paint from empty/base weight only
                     return Math.ceil((parseFloat(newItemBaseWeight) || 1) * SUB_CELLS);
                 } else {
                     return Math.ceil((parseFloat(newItemWeight) || 1) * SUB_CELLS);
@@ -567,14 +582,26 @@
                   }
 
                 } else if (containerType === 'quantity') {
-                  const baseW = parseFloat(newItemBaseWeight);
-                  const fillW = parseFloat(newItemFilledWeight);
-                  const units = parseInt(newItemMaxUnits);
-                  if (!newItemName || isNaN(baseW) || isNaN(fillW) || isNaN(units) || baseW <= 0 || fillW <= 0 || units <= 0) return;
-                  weight = baseW + fillW;
-                  emptyWeight = baseW;
-                  contentsWeight = fillW;
-                  maxUnits = units;
+                  if (newItemFillMode === 'auto-fill') {
+                    const baseW  = parseFloat(newItemBaseWeight);
+                    const maxFillW = parseFloat(newItemMaxFillWeight);
+                    const incrW  = parseFloat(newItemIncrementWeight);
+                    if (!newItemName || isNaN(baseW) || isNaN(maxFillW) || isNaN(incrW) || baseW <= 0 || maxFillW <= 0 || incrW <= 0) return;
+                    weight = baseW;
+                    emptyWeight = baseW;
+                    contentsWeight = maxFillW;
+                    maxUnits = Math.floor(maxFillW / incrW);
+                  } else {
+                    // auto-drain (legacy painted mode)
+                    const baseW = parseFloat(newItemBaseWeight);
+                    const fillW = parseFloat(newItemFilledWeight);
+                    const units = parseInt(newItemMaxUnits);
+                    if (!newItemName || isNaN(baseW) || isNaN(fillW) || isNaN(units) || baseW <= 0 || fillW <= 0 || units <= 0) return;
+                    weight = baseW + fillW;
+                    emptyWeight = baseW;
+                    contentsWeight = fillW;
+                    maxUnits = units;
+                  }
 
                 } else if (containerType === 'coinpurse') {
                   const baseW = parseFloat(newItemBaseWeight);
@@ -596,18 +623,42 @@
                 if (!newItemName || isNaN(weight) || weight < 0) return;
               }
 
-              // 0-weight items need no shape — they live in the Weightless Items list, not the grid.
+              // 0-weight items live in the Weightless Items list — no shape needed.
               const isWeightlessItem = weight === 0;
-              if (!isWeightlessItem) {
+              // Auto-fill containers generate their own shape — no painting needed.
+              const isAutoFill = containerType === 'grid' ||
+                                 containerType === 'stacked' ||
+                                 (containerType === 'quantity' && newItemFillMode === 'auto-fill');
+
+              if (!isWeightlessItem && !isAutoFill) {
                 const targetSubCells = calcTargetSubCells();
                 if (newItemShape.length !== targetSubCells) return;
               }
 
-              const sortedShape = isWeightlessItem ? [] : [...newItemShape].sort((a, b) => {
-                const [ar, ac] = a.split(',').map(Number);
-                const [br, bc] = b.split(',').map(Number);
-                return ar !== br ? ar - br : ac - bc;
-              });
+              let finalShape;
+              if (isWeightlessItem) {
+                finalShape = [];
+              } else if (containerType === 'stacked') {
+                // Stacked: base shape = the empty-box rectangle. Two sub-cols wide, height ∝ emptyWeight.
+                finalShape = [];
+                const boxH = Math.max(SUB_DIVISIONS, Math.round(emptyWeight * SUB_DIVISIONS));
+                if ((newItemScaleDirection || 'horizontal') === 'horizontal') {
+                  for (let r = 0; r < boxH; r++)
+                    for (let c = 0; c < SUB_DIVISIONS; c++) finalShape.push(`${r},${c}`);
+                } else {
+                  for (let r = 0; r < SUB_DIVISIONS; r++)
+                    for (let c = 0; c < boxH; c++) finalShape.push(`${r},${c}`);
+                }
+              } else if (isAutoFill) {
+                // Grid and auto-fill quantity: initial shape from emptyWeight
+                finalShape = getAutoScaleShape(emptyWeight);
+              } else {
+                finalShape = [...newItemShape].sort((a, b) => {
+                  const [ar, ac] = a.split(',').map(Number);
+                  const [br, bc] = b.split(',').map(Number);
+                  return ar !== br ? ar - br : ac - bc;
+                });
+              }
 
               const itemColor = newItemType === 'potion' ? newItemColor : ITEM_TYPES[newItemType].color;
 
@@ -615,16 +666,19 @@
                 id: editingItemId ?? Date.now(),
                 name: newItemName,
                 weight,
-                shape: sortedShape,
+                shape: finalShape,
                 type: newItemType,
                 color: itemColor,
                 containerType,
                 emptyWeight,
                 contentsWeight,
                 maxUnits,
-                currentUnits: containerType === 'stacked' ? 0 : (containerType === 'quantity' ? maxUnits : null),
-                currentWeight: containerType === 'grid' ? emptyWeight : (containerType === 'stacked' ? emptyWeight : weight),
-                scaleDirection: (containerType === 'quantity' || containerType === 'stacked') ? newItemScaleDirection : null,
+                currentUnits: containerType === 'stacked' ? 0 : (containerType === 'quantity' ? (newItemFillMode === 'auto-fill' ? 0 : maxUnits) : null),
+                currentWeight: containerType === 'grid' ? emptyWeight : (containerType === 'stacked' ? emptyWeight : (containerType === 'quantity' && newItemFillMode === 'auto-fill' ? emptyWeight : weight)),
+                scaleMode: (containerType === 'grid' || (containerType === 'quantity' && newItemFillMode === 'auto-fill')) ? 'auto-fill' : undefined,
+                scaleDirection: (containerType === 'quantity' && newItemFillMode !== 'auto-fill') || containerType === 'stacked' ? newItemScaleDirection : null,
+                incrementWeight: containerType === 'quantity' && newItemFillMode === 'auto-fill' ? parseFloat(newItemIncrementWeight) : undefined,
+                contentLabel:    containerType === 'quantity' && newItemFillMode === 'auto-fill' ? (newItemContentLabel.trim() || undefined) : undefined,
                 internalCapacity,
                 internalGrid: containerType === 'grid' ? [] : undefined,
                 externalSlots: containerType === 'grid' ? externalSlots : undefined,
@@ -673,6 +727,10 @@
                 setEditingItemId(null);
                 setNewItemItemWeight('');
                 setNewItemCapacityPerUnit('');
+                setNewItemFillMode('auto-drain');
+                setNewItemMaxFillWeight('');
+                setNewItemIncrementWeight('');
+                setNewItemContentLabel('');
             };
 
             const startEditItem = (item) => {
@@ -695,9 +753,17 @@
                 } else if (item.containerType === 'quantity') {
                     setNewItemContainerSubtype('quantity');
                     setNewItemBaseWeight(String(item.emptyWeight));
-                    setNewItemFilledWeight(String(item.contentsWeight));
-                    setNewItemMaxUnits(String(item.maxUnits));
-                    setNewItemScaleDirection(item.scaleDirection || 'vertical');
+                    if (item.scaleMode === 'auto-fill') {
+                        setNewItemFillMode('auto-fill');
+                        setNewItemMaxFillWeight(String(item.contentsWeight));
+                        setNewItemIncrementWeight(String(item.incrementWeight ?? ''));
+                        setNewItemContentLabel(item.contentLabel || '');
+                    } else {
+                        setNewItemFillMode('auto-drain');
+                        setNewItemFilledWeight(String(item.contentsWeight));
+                        setNewItemMaxUnits(String(item.maxUnits));
+                        setNewItemScaleDirection(item.scaleDirection || 'vertical');
+                    }
                 } else if (item.containerType === 'coinpurse') {
                     setNewItemContainerSubtype('coinpurse');
                     setNewItemBaseWeight(String(item.emptyWeight));
@@ -744,8 +810,68 @@
               return container.internalGrid.reduce((sum, item) => sum + (item.currentWeight || item.weight), 0);
             };
 
+            // Produces a filled rectangle whose area equals currentWeight cells (1 lb = 4 sub-cells²).
+            // Respects a soft 5-cell (10 sub-cell) width cap, expanding downward first.
+            // Only exceeds softMaxW when height is fully consumed by hardMaxH.
+            const getAutoScaleShape = (weightLbs, gridContext = null) => {
+                const S = SUB_DIVISIONS; // 2 sub-cells per cell side
+                const softMaxW_cells = 5; // encumbrance tier width in cells
+                const hardMaxH_cells = Math.floor((gridContext?.hardMaxRows ?? GRID_SUB_ROWS) / S);
+                const hardMaxW_cells = Math.floor((gridContext?.hardMaxCols ?? GRID_SUB_COLS) / S);
+
+                const totalCells = Math.max(1, Math.round(weightLbs));
+                const mainCapacity = softMaxW_cells * hardMaxH_cells;
+                const mainCells = Math.min(totalCells, mainCapacity);
+                const mainCompleteRows = Math.floor(mainCells / softMaxW_cells);
+                const mainRemainder = mainCells % softMaxW_cells;
+
+                // cell-coord pairs [cellRow, cellCol]
+                const cellCoords = [];
+
+                // Main body: fill row by row (left to right, top to bottom)
+                for (let r = 0; r < mainCompleteRows; r++)
+                    for (let c = 0; c < softMaxW_cells; c++)
+                        cellCoords.push([r, c]);
+                if (mainRemainder > 0)
+                    for (let c = 0; c < mainRemainder; c++)
+                        cellCoords.push([mainCompleteRows, c]);
+
+                // Overflow: fill column by column (top to bottom), one cell wide each
+                let overflowCells = Math.max(0, totalCells - mainCapacity);
+                let overflowCol = softMaxW_cells;
+                while (overflowCells > 0 && overflowCol < hardMaxW_cells) {
+                    const colCells = Math.min(overflowCells, hardMaxH_cells);
+                    for (let r = 0; r < colCells; r++)
+                        cellCoords.push([r, overflowCol]);
+                    overflowCells -= colCells;
+                    overflowCol++;
+                }
+
+                // Convert cell coords to sub-cell coords
+                const shape = [];
+                for (const [cr, cc] of cellCoords)
+                    for (let dr = 0; dr < S; dr++)
+                        for (let dc = 0; dc < S; dc++)
+                            shape.push(`${cr * S + dr},${cc * S + dc}`);
+                return shape;
+            };
+
             const getScaledContainerShape = (item, gridContext = null) => {
               if (item.containerType === null) return item.shape;
+
+              // Auto-fill: any container type that scales from empty upward using weight-based rectangles
+              if (item.scaleMode === 'auto-fill') {
+                  let w;
+                  if (item.containerType === 'grid') {
+                      w = item.emptyWeight + calculateInternalWeight(item) + calculateExternalWeight(item);
+                  } else if (item.containerType === 'quantity') {
+                      const unitW = item.incrementWeight ?? (item.contentsWeight / item.maxUnits);
+                      w = item.emptyWeight + item.currentUnits * unitW;
+                  } else {
+                      w = item.currentWeight ?? item.emptyWeight;
+                  }
+                  return getAutoScaleShape(w, gridContext);
+              }
 
               let currentWeight;
               if (item.containerType === 'grid') {
@@ -1130,6 +1256,36 @@
                     }
                     return item;
                 }));
+            };
+
+            // For auto-fill quantity containers: add/remove arbitrary amounts (coin-purse style).
+            const adjustQuantityByAmount = (itemId, delta) => {
+                const applyUpdate = (item, maxRows, maxCols) => {
+                    if (item.id !== itemId || item.containerType !== 'quantity') return item;
+                    const newUnits  = Math.max(0, Math.min(item.maxUnits, item.currentUnits + delta));
+                    const unitW     = item.incrementWeight ?? (item.contentsWeight / item.maxUnits);
+                    const newWeight = item.emptyWeight + newUnits * unitW;
+                    const updated   = { ...item, currentUnits: newUnits, currentWeight: newWeight };
+                    const newShape  = getScaledContainerShape(updated);
+                    const newBounds = getShapeBounds(newShape);
+                    let newRow = item.position.row, newCol = item.position.col;
+                    if (newRow + newBounds.minRow < 0)               newRow = -newBounds.minRow;
+                    if (newRow + newBounds.maxRow >= maxRows)         newRow = maxRows - 1 - (newBounds.maxRow - newBounds.minRow);
+                    if (newCol + newBounds.minCol < 0)               newCol = -newBounds.minCol;
+                    if (newCol + newBounds.maxCol >= maxCols)         newCol = maxCols - 1 - (newBounds.maxCol - newBounds.minCol);
+                    return { ...updated, position: { row: newRow, col: newCol } };
+                };
+                if (openContainerId) {
+                    const container = placedItems.find(c => c.id === openContainerId);
+                    if (container?.internalGrid.find(i => i.id === itemId && i.containerType === 'quantity')) {
+                        const dims = getInternalDimensions(container);
+                        setPlacedItems(prev => prev.map(c =>
+                            c.id !== openContainerId ? c : { ...c, internalGrid: c.internalGrid.map(i => applyUpdate(i, dims.subRows, dims.subCols)) }
+                        ));
+                        return;
+                    }
+                }
+                setPlacedItems(prev => prev.map(i => applyUpdate(i, GRID_SUB_ROWS, GRID_SUB_COLS)));
             };
 
             const adjustStackedQuantity = (itemId, delta) => {
@@ -1992,8 +2148,11 @@
               const itemHeightPx = itemHeightSub * subCellSize;
 
               const nameText = item.name;
-              const quantityText = item.containerType === 'quantity' ? `${item.currentUnits}/${item.maxUnits}`
-                                 : item.containerType === 'stacked'  ? `${item.currentUnits}`
+              const quantityText = item.containerType === 'quantity'
+                                 ? (item.scaleMode === 'auto-fill' && item.contentLabel
+                                     ? `${item.currentUnits}/${item.maxUnits} ${item.contentLabel}`
+                                     : `${item.currentUnits}/${item.maxUnits}`)
+                                 : item.containerType === 'stacked' ? `${item.currentUnits}`
                                  : '';
               const texts = [nameText];
               if (quantityText) texts.push(quantityText);
@@ -2525,6 +2684,24 @@
                 };
             }, [isCreatingItem, isPainting, paintMode, creationGridHeight, creationGridWidth, creationSubCellSize, creationGridCellMode]);
 
+            // Default library merge — adds any default items the player doesn't already have (matched by name)
+            const mergeDefaultLibrary = (current, defaults) => {
+                const existingNames = new Set(current.map(i => i.name.trim().toLowerCase()));
+                const toAdd = defaults.filter(i => !existingNames.has(i.name.trim().toLowerCase()));
+                return toAdd.length > 0 ? [...current, ...toAdd] : current;
+            };
+
+            useEffect(() => {
+                fetch('/cubeventory/default_library.json')
+                    .then(r => r.ok ? r.json() : null)
+                    .then(data => {
+                        if (!data?.libraryItems?.length) return;
+                        defaultLibraryRef.current = data.libraryItems;
+                        setItems(prev => mergeDefaultLibrary(prev, data.libraryItems));
+                    })
+                    .catch(() => {}); // silently skip if offline on first load
+            }, []);
+
             // Auto-save to localStorage (debounced 1.5 s after last change)
             useEffect(() => {
                 if (showStartup) return;
@@ -2722,7 +2899,7 @@
                             const data = JSON.parse(e.target.result);
                             if (data.characters?.length > 0) {
                                 // v2 format
-                                setItems(data.libraryItems || []);
+                                setItems(mergeDefaultLibrary(data.libraryItems || [], defaultLibraryRef.current));
                                 setCharacters(data.characters);
                                 const aid = data.activeCharacterId || data.characters[0].id;
                                 const ac = data.characters.find(c => c.id === aid) || data.characters[0];
@@ -2734,7 +2911,7 @@
                                 setWeightlessItems(ac.weightlessItems || []);
                             } else {
                                 // v1 format
-                                setItems(data.items || []);
+                                setItems(mergeDefaultLibrary(data.items || [], defaultLibraryRef.current));
                                 const char = { id: DEFAULT_CHAR_ID, name: data.characterName || '', strength: data.strength || 10, placedItems: data.placedItems || [], setAsideItems: data.setAsideItems || [], weightlessItems: [] };
                                 setCharacters([char]);
                                 setActiveCharacterId(DEFAULT_CHAR_ID);
@@ -3719,19 +3896,33 @@
                                     </div>
                                   ) : newItemContainerSubtype === 'quantity' ? (
                                     <div>
-                                      <input value={newItemFilledWeight} onChange={(e) => setNewItemFilledWeight(e.target.value)} placeholder="Filled Contents Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      <input value={newItemMaxUnits} onChange={(e) => setNewItemMaxUnits(e.target.value)} placeholder="Max Units" type="number" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      <select value={newItemScaleDirection} onChange={(e) => setNewItemScaleDirection(e.target.value)} className="
-                                      w-full mb-2 dark:text-gray-400 p-2 border rounded
-                                      bg-white
-                                      text-gray-400
-                                      border-gray-300 dark:border-gray-600
-                                      focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400
-                                    "
-                                  >
-                                        <option value="vertical">Scale Vertical</option>
-                                        <option value="horizontal">Scale Horizontal</option>
-                                      </select>
+                                      <div className="flex gap-2 mb-2">
+                                        <button onClick={() => setNewItemFillMode('auto-drain')}
+                                          className={`flex-1 py-1.5 rounded border text-sm ${newItemFillMode === 'auto-drain' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 text-gray-600'}`}>
+                                          Paint Filled Shape
+                                        </button>
+                                        <button onClick={() => setNewItemFillMode('auto-fill')}
+                                          className={`flex-1 py-1.5 rounded border text-sm ${newItemFillMode === 'auto-fill' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 text-gray-600'}`}>
+                                          Auto-Scale from Empty
+                                        </button>
+                                      </div>
+                                      {newItemFillMode === 'auto-fill' ? (
+                                        <>
+                                          <input value={newItemMaxFillWeight} onChange={(e) => setNewItemMaxFillWeight(e.target.value)} placeholder="Max Fill Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                          <input value={newItemIncrementWeight} onChange={(e) => setNewItemIncrementWeight(e.target.value)} placeholder="Weight per unit (lbs, e.g. 8 for 1 gallon)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                          <input value={newItemContentLabel} onChange={(e) => setNewItemContentLabel(e.target.value)} placeholder="Unit label (e.g. gallons, apples)" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                          <p className="text-xs text-gray-400 italic mb-2">Max units = floor(max fill ÷ unit weight). Shape auto-generates — no drawing needed.</p>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <input value={newItemFilledWeight} onChange={(e) => setNewItemFilledWeight(e.target.value)} placeholder="Filled Contents Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                          <input value={newItemMaxUnits} onChange={(e) => setNewItemMaxUnits(e.target.value)} placeholder="Max Units" type="number" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                          <select value={newItemScaleDirection} onChange={(e) => setNewItemScaleDirection(e.target.value)} className="w-full mb-2 dark:text-gray-400 p-2 border rounded bg-white text-gray-400 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                            <option value="vertical">Scale Vertical</option>
+                                            <option value="horizontal">Scale Horizontal</option>
+                                          </select>
+                                        </>
+                                      )}
                                     </div>
                                   ) : newItemContainerSubtype === 'stacked' ? (
                                     <div>
@@ -3761,9 +3952,22 @@
                               ) : (
                                 <input value={newItemWeight} onChange={(e) => setNewItemWeight(e.target.value)} placeholder="Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
                               )}
-                                {parseFloat(newItemWeight) === 0 && newItemType !== 'container' ? (
-                                  <p className="text-xs text-gray-400 italic mb-2">0-weight items don't need a shape — they go straight to the Weightless Items list.</p>
-                                ) : (
+                                {(() => {
+                                  const _autoFillContainer = newItemType === 'container' && (
+                                    newItemContainerSubtype === 'grid' ||
+                                    newItemContainerSubtype === 'stacked' ||
+                                    (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill')
+                                  );
+                                  const _weightless = parseFloat(newItemWeight) === 0 && newItemType !== 'container';
+                                  if (_weightless) return <p className="text-xs text-gray-400 italic mb-2">0-weight items don't need a shape — they go straight to the Weightless Items list.</p>;
+                                  if (_autoFillContainer) return <p className="text-xs text-gray-400 italic mb-2">Shape auto-generates from empty weight — no drawing required.</p>;
+                                  return null;
+                                })()}
+                                {(newItemType !== 'container' ? parseFloat(newItemWeight) !== 0 : !(
+                                    newItemContainerSubtype === 'grid' ||
+                                    newItemContainerSubtype === 'stacked' ||
+                                    (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill')
+                                )) ? (
                                 <>
                                   <div className="mb-2">
                                     <label className="block text-sm font-medium mb-1">Creation Grid Scale: {(creationGridScale * 100).toFixed(0)}%</label>
@@ -3834,10 +4038,15 @@
                                         </div>
                                     ))}
                                 </div>
-                                </>
-                                )}
+                                </>) : null}
                                 <div className="flex gap-2">
-                                    <button onClick={() => editingItemId ? setConfirmLibraryEdit(true) : saveNewItem()} disabled={(parseFloat(newItemWeight) !== 0 && newItemShape.length !== targetSubCells) || !newItemName} className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-300">{editingItemId ? 'Save Changes' : 'Save Item'}</button>
+                                    <button onClick={() => editingItemId ? setConfirmLibraryEdit(true) : saveNewItem()} disabled={(() => {
+                                        if (!newItemName) return true;
+                                        const _autoFill = newItemType === 'container' && (newItemContainerSubtype === 'grid' || newItemContainerSubtype === 'stacked' || (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill'));
+                                        const _weightless = parseFloat(newItemWeight) === 0 && newItemType !== 'container';
+                                        if (_autoFill || _weightless) return false;
+                                        return newItemShape.length !== targetSubCells;
+                                    })()} className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-300">{editingItemId ? 'Save Changes' : 'Save Item'}</button>
                                     <button onClick={() => { setIsCreatingItem(false); resetItemCreation(); }} className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Cancel</button>
                                 </div>
                             </>
@@ -3958,9 +4167,18 @@
                             <div className="flex items-center justify-between mb-2">
                                 <h2 className="text-lg font-bold">Inventory Grid</h2>
                                 <div className="grid grid-cols-2 gap-1.5">
-                                    <button onClick={() => setShowTransferPanel(true)}
-                                        className="flex items-center justify-center gap-1 bg-teal-500 text-white px-3 py-1 rounded text-xs hover:bg-teal-600">
-                                        Send Items{transferQueue.length > 0 && <span className="bg-white text-teal-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{transferQueue.length}</span>}
+                                    <button onClick={() => {
+                                        if (selectedItem && !openContainerId) {
+                                            const alreadyQueued = transferQueue.find(q => q.gridItemId === selectedItem.id);
+                                            if (alreadyQueued) { removeFromQueue(alreadyQueued.qid); }
+                                            else { addGridItemToQueue(selectedItem); }
+                                        } else {
+                                            setShowTransferPanel(true);
+                                        }
+                                    }} className={`flex items-center justify-center gap-1 px-3 py-1 rounded text-xs ${selectedItem && !openContainerId ? (transferQueue.find(q => q.gridItemId === selectedItem.id) ? 'bg-teal-700 text-white hover:bg-teal-800' : 'bg-teal-500 text-white hover:bg-teal-600') : 'bg-teal-500 text-white hover:bg-teal-600'}`}>
+                                        {selectedItem && !openContainerId
+                                            ? (transferQueue.find(q => q.gridItemId === selectedItem.id) ? '✓ Queued' : 'Queue Item')
+                                            : <>Send Items{transferQueue.length > 0 && <span className="bg-white text-teal-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">{transferQueue.length}</span>}</>}
                                     </button>
                                     <button onClick={() => setShowAttunements(true)}
                                         className="flex items-center justify-center gap-1 bg-amber-500 text-white px-3 py-1 rounded text-xs hover:bg-amber-600">
@@ -4859,7 +5077,28 @@
                                       </button>
                                     </>
                                   );
-                                })() : (
+                                })() : selectedItem.containerType === 'quantity' && selectedItem.scaleMode === 'auto-fill' ? (
+                                  // Auto-fill quantity: freeform amount input + ± buttons
+                                  <>
+                                    <button onClick={() => adjustQuantityByAmount(selectedItem.id, -(parseInt(quantityInputAmt) || 1))}
+                                      disabled={selectedItem.currentUnits <= 0}
+                                      className="flex flex-col items-center gap-1 bg-orange-500 text-white px-3 py-3 rounded hover:bg-orange-600 flex-1 disabled:bg-gray-300 disabled:cursor-not-allowed">
+                                      <span className="text-xl">−</span>
+                                    </button>
+                                    <div className="flex flex-col items-center gap-1 flex-1">
+                                      <span className="text-xs text-gray-500">{selectedItem.currentUnits}/{selectedItem.maxUnits}{selectedItem.contentLabel ? ` ${selectedItem.contentLabel}` : ''}</span>
+                                      <input type="number" min="1" max={selectedItem.maxUnits} value={quantityInputAmt}
+                                        onChange={e => setQuantityInputAmt(e.target.value)}
+                                        className="w-full text-center border rounded p-1 text-sm dark:bg-gray-800 dark:text-gray-200" />
+                                    </div>
+                                    <button onClick={() => adjustQuantityByAmount(selectedItem.id, parseInt(quantityInputAmt) || 1)}
+                                      disabled={selectedItem.currentUnits >= selectedItem.maxUnits}
+                                      className="flex flex-col items-center gap-1 bg-green-500 text-white px-3 py-3 rounded hover:bg-green-600 flex-1 disabled:bg-gray-300 disabled:cursor-not-allowed">
+                                      <span className="text-xl">+</span>
+                                    </button>
+                                  </>
+                                ) : (
+                                  // Legacy auto-drain quantity: ±1 buttons
                                   <>
                                     <button onClick={() => adjustContainerQuantity(selectedItem.id, -1)} disabled={selectedItem.currentUnits <= 0} className="flex flex-col items-center gap-1 bg-orange-500 text-white px-4 py-3 rounded hover:bg-orange-600 flex-1 disabled:bg-gray-300 disabled:cursor-not-allowed">
                                       <span className="text-xl">−</span>
@@ -4885,7 +5124,7 @@
                                     <button onClick={() => setAttuneClassMsg({ name: selectedItem.name, classes: _classes })}
                                         className="flex flex-col items-center gap-1 bg-gray-300 text-gray-500 dark:text-gray-400 px-4 py-3 rounded flex-1 hover:bg-gray-400 hover:text-gray-700 dark:text-gray-300">
                                         <AttuneIcon size={22} outline={true} />
-                                        <span className="text-xs text-center leading-tight">Class Req.<br/>Unmet</span>
+                                        <span className="text-xs text-center leading-tight">Req.<br/>Unmet</span>
                                     </button>
                                 );
                                 return (
@@ -5205,7 +5444,7 @@
                         return (
                             <div className="fixed inset-0 bg-black/50 dark:bg-black/80 flex items-end justify-center z-[2000]"
                                 onClick={() => setShowTransferPanel(false)}>
-                                <div className="bg-white dark:bg-gray-900 rounded-t-xl w-full max-w-md max-h-[82vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                                <div className="bg-white dark:bg-gray-900 rounded-t-xl w-full max-w-md h-[82vh] flex flex-col" onClick={e => e.stopPropagation()}>
                                     <div className="flex justify-between items-center px-4 py-3 border-b flex-shrink-0">
                                         <h3 className="font-bold text-lg">Send Items</h3>
                                         <button onClick={() => setShowTransferPanel(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
@@ -5215,9 +5454,31 @@
                                         {/* Grid items picker */}
                                         <div className="mb-4">
                                             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">From Inventory Grid</p>
-                                            {placedItems.length === 0
-                                                ? <p className="text-sm text-gray-400">No items on grid.</p>
-                                                : placedItems.map(item => {
+                                            <input
+                                                type="text"
+                                                value={transferSearch}
+                                                onChange={e => setTransferSearch(e.target.value)}
+                                                placeholder="Search items…"
+                                                className="w-full border rounded px-2 py-1 text-sm text-gray-500 dark:text-gray-400 mb-2 dark:bg-gray-800 dark:border-gray-600"
+                                            />
+                                            <div className="flex gap-1 flex-wrap mb-3">
+                                                {['all', 'armor', 'melee weapon', 'ranged weapon', 'firearm', 'ammunition', 'explosive', 'supply', 'tool', 'foci', 'clothing', 'container', 'potion'].map(cat => (
+                                                    <button key={cat} onClick={() => setTransferCategoryFilter(cat)}
+                                                        className={`px-2 py-0.5 rounded text-xs border ${transferCategoryFilter === cat ? 'bg-gray-700 text-white border-gray-700' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-100'}`}>
+                                                        {cat === 'all' ? 'All' : ITEM_TYPES[cat]?.name ?? cat}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            {(() => {
+                                                const search = transferSearch.trim().toLowerCase();
+                                                const filtered = placedItems.filter(item => {
+                                                    const matchesSearch = !search || item.name.toLowerCase().includes(search);
+                                                    const matchesCat = transferCategoryFilter === 'all' || item.type === transferCategoryFilter;
+                                                    return matchesSearch && matchesCat;
+                                                });
+                                                if (placedItems.length === 0) return <p className="text-sm text-gray-400">No items on grid.</p>;
+                                                if (filtered.length === 0) return <p className="text-sm text-gray-400 italic">No items match.</p>;
+                                                return filtered.map(item => {
                                                     const isQueued = queuedGridIds.has(item.id);
                                                     const qEntry = isQueued ? transferQueue.find(q => q.gridItemId === item.id) : null;
                                                     return (
@@ -5234,8 +5495,8 @@
                                                             </button>
                                                         </div>
                                                     );
-                                                })
-                                            }
+                                                });
+                                            })()}
                                         </div>
 
                                         {/* Transfer queue review */}
@@ -5296,7 +5557,7 @@
                                                 <button
                                                     onClick={() => { setShowTransferPanel(false); setShowTransferQR(true); }}
                                                     disabled={qrChars > QR_MAX_CHARS}
-                                                    className="w-full bg-teal-500 text-white py-3 rounded-lg font-semibold hover:bg-teal-600 disabled:bg-gray-300 disabled:text-gray-500 dark:text-gray-400 text-sm">
+                                                    className="w-full bg-teal-500 text-white py-3 rounded-lg font-semibold hover:bg-teal-600 disabled:bg-gray-300 disabled:text-gray-500 text-sm">
                                                     Generate QR Code
                                                 </button>
                                             </>
