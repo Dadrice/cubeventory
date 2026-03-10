@@ -9655,40 +9655,5 @@
       "internalGrid": [],
       "externalSlots": []
     }
-    {
-      "id": 1772594094918.097,
-      "name": "Coin Purse",
-      "weight": 1,
-      "shape": [
-        "0,0",
-        "0,1",
-        "1,0",
-        "1,1"
-      ],
-      "type": "container",
-      "color": "#92400E",
-      "containerType": "coinpurse",
-      "emptyWeight": 1,
-      "contentsWeight": 0,
-      "maxUnits": 0,
-      "currentUnits": null,
-      "currentWeight": 30,
-      "scaleDirection": null,
-      "internalCapacity": 0,
-      "coins": {
-        "cp": 0,
-        "sp": 1250,
-        "ep": 0,
-        "gp": 0,
-        "pp": 0
-      },
-      "columnCap": 5,
-      "maxColumns": 5,
-      "position": {
-        "row": 6,
-        "col": 0
-      },
-      "notes": "Boy howdy, what a bag."
-    }
   ]
 }
