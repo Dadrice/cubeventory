@@ -56,7 +56,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useRef, useEffect } = React;
+        const { useState, useRef, useEffect, useMemo } = React;
 
         const Save = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>;
         const Upload = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>;
@@ -200,6 +200,7 @@
             );
         };
 
+        const DRAG_THRESHOLD  = 4;  // px of movement before a press becomes an active drag
         const AUTOSAVE_KEY    = 'cubeventory_autosave';
         const BACKUPS_KEY     = 'cubeventory_backups';
         const MAX_BACKUPS     = 5;
@@ -207,6 +208,211 @@
         const DEFAULT_CHAR_ID = 'char_default';
         const loadAutoSave = () => { try { return JSON.parse(localStorage.getItem(AUTOSAVE_KEY) || 'null'); } catch { return null; } };
         const QR_MAX_CHARS = 2900; // QR v40 L-level EC byte limit (2953); L chosen over M for fewer modules = larger modules on screen
+
+        // Pure helper — computes bounding box of a shape array.
+        const getShapeBounds = (shape) => {
+            let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity;
+            for (const cell of shape) {
+                const comma = cell.indexOf(',');
+                const r = parseInt(cell, 10);
+                const c = parseInt(cell.slice(comma + 1), 10);
+                if (r < minRow) minRow = r;
+                if (r > maxRow) maxRow = r;
+                if (c < minCol) minCol = c;
+                if (c > maxCol) maxCol = c;
+            }
+            return { minRow, maxRow, minCol, maxCol, centerRow: (minRow + maxRow) / 2, centerCol: (minCol + maxCol) / 2 };
+        };
+
+        // Pure helper — returns the topmost/bottommost cell in the rightmost column of a shape.
+        const getBadgeAnchor = (shape, bounds, corner) => {
+            const cells = shape.map(s => { const comma = s.indexOf(','); return { r: parseInt(s, 10), c: parseInt(s.slice(comma + 1), 10) }; });
+            const rightCells = cells.filter(cell => cell.c === bounds.maxCol);
+            return corner === 'top-right'
+                ? rightCells.reduce((a, b) => a.r < b.r ? a : b)
+                : rightCells.reduce((a, b) => a.r > b.r ? a : b);
+        };
+
+        // Per-item render, memoized so non-dragged items are skipped entirely on drag frames.
+        // Functions that live inside CubeventoryTracker are accessed via helpersRef (a stable ref
+        // updated every render), so they never need to be in the areEqual comparison.
+        const PlacedGridItem = React.memo(
+            function PlacedGridItem({ item, selected, subCellSize, cellSize, characterName, badgeLayout, helpersRef }) {
+                const h = helpersRef.current;
+                const shape    = h.getScaledContainerShape(item);
+                const bounds   = getShapeBounds(shape);
+                const wSub     = bounds.maxCol - bounds.minCol + 1;
+                const hSub     = bounds.maxRow - bounds.minRow + 1;
+                const itemW    = wSub * subCellSize;
+                const itemH    = hSub * subCellSize;
+                const originT  = (item.position.row + bounds.minRow) * subCellSize;
+                const originL  = (item.position.col + bounds.minCol) * subCellSize;
+                const isRect   = shape.length === wSub * hSub;
+                const darker   = darkenColor(item.color);
+                const textDisp = h.calculateItemTextDisplay(item, subCellSize);
+                const magicStyle = item.magical ? { '--mc': item.magicalColor || '#a855f7' } : undefined;
+
+                return (
+                    <div className="absolute top-0 left-0 pointer-events-none">
+                        {selected && shape.map((cell, idx) => {
+                            const comma = cell.indexOf(',');
+                            const r = parseInt(cell, 10), c = parseInt(cell.slice(comma + 1), 10);
+                            return (
+                                <div key={`h-${idx}`}
+                                    className={`absolute pointer-events-none ${getSelectionBorders(shape, r, c).join(' ')}`}
+                                    style={{ width: subCellSize, height: subCellSize,
+                                        top:  (item.position.row + r) * subCellSize,
+                                        left: (item.position.col + c) * subCellSize,
+                                        borderColor: h.selectionColor, zIndex: 2 }}
+                                />
+                            );
+                        })}
+                        {selected && renderConcaveCornerFillers(shape, item.position, subCellSize, h.selectionColor, 2, `main-${item.id}`)}
+
+                        {isRect ? (
+                            // Rectangular fast path — one div instead of wSub×hSub divs.
+                            <div className={item.magical ? 'magical-glow absolute pointer-events-auto cursor-pointer' : 'absolute pointer-events-auto cursor-pointer'}
+                                style={{ top: originT, left: originL, width: itemW, height: itemH,
+                                    backgroundColor: item.color, opacity: 0.8, zIndex: 1,
+                                    touchAction: 'none', border: `1px solid ${darker}`, ...magicStyle }}
+                                onClick={(e) => { e.stopPropagation(); if (!h.discardTarget) h.setSelectedItemId(item.id); }}
+                                onPointerDown={(e) => { e.target.setPointerCapture(e.pointerId); h.handleItemDragStart(e, item); }}
+                            />
+                        ) : (
+                            // Irregular shape — wrapper at item origin, sub-cells relative (only wrapper moves on drag).
+                            <div className={item.magical ? 'magical-glow absolute pointer-events-none' : 'absolute pointer-events-none'}
+                                style={{ top: originT, left: originL, ...magicStyle }}>
+                                {shape.map((cell, idx) => {
+                                    const comma = cell.indexOf(',');
+                                    const r = parseInt(cell, 10), c = parseInt(cell.slice(comma + 1), 10);
+                                    const isOverlapping = (h.mainGridOccupancy[`${item.position.row + r},${item.position.col + c}`] || 0) > 1;
+                                    return (
+                                        <div key={idx} className="absolute pointer-events-auto cursor-pointer"
+                                            style={{ width: subCellSize, height: subCellSize,
+                                                top:  (r - bounds.minRow) * subCellSize,
+                                                left: (c - bounds.minCol) * subCellSize,
+                                                backgroundColor: isOverlapping ? '#EF4444' : item.color,
+                                                opacity: isOverlapping ? 1 : 0.8, zIndex: 1,
+                                                touchAction: 'none',
+                                                ...getItemBorderStyle(shape, r, c, darker) }}
+                                            onClick={(e) => { e.stopPropagation(); if (!h.discardTarget) h.setSelectedItemId(item.id); }}
+                                            onPointerDown={(e) => { e.target.setPointerCapture(e.pointerId); h.handleItemDragStart(e, item); }}
+                                        />
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {(() => {
+                            const hasAttune = item.requiresAttunement;
+                            const hasNotes  = !!(item.notes?.trim());
+                            if (!hasAttune && !hasNotes) return null;
+                            const bs = Math.max(10, Math.floor(subCellSize * 0.5));
+                            const anchor = getBadgeAnchor(shape, bounds, 'top-right');
+                            const aTop  = (item.position.row + anchor.r) * subCellSize + 2;
+                            const aLeft = (item.position.col + anchor.c + 1) * subCellSize - bs - 2;
+                            const mk = (icon, color, top, left, filter) => (
+                                <div className="absolute pointer-events-none" style={{ top, left, zIndex: 3, color, lineHeight: 0, filter }}>{icon}</div>
+                            );
+                            const af = 'drop-shadow(0 0 2px rgba(0,0,0,0.9))';
+                            if (hasAttune && hasNotes) {
+                                const isAttuned = item.attunedTo === characterName;
+                                const s2T = badgeLayout === 'vertical' ? aTop + bs + 1 : aTop;
+                                const s2L = badgeLayout === 'vertical' ? aLeft : aLeft - bs - 1;
+                                return <>{mk(<NoteEdit size={bs}/>, '#ffffff', aTop, aLeft, af)}{mk(<AttuneIcon size={bs} outline={!isAttuned}/>, isAttuned ? '#f59e0b' : '#fbbf24', s2T, s2L, af)}</>;
+                            }
+                            if (hasAttune) { const isAttuned = item.attunedTo === characterName; return mk(<AttuneIcon size={bs} outline={!isAttuned}/>, isAttuned ? '#f59e0b' : '#fbbf24', aTop, aLeft, af); }
+                            return mk(<NoteEdit size={bs}/>, '#ffffff', aTop, aLeft, af);
+                        })()}
+                        {renderTextOverlay(textDisp, originT, originL, itemW, itemH, subCellSize, cellSize, 1)}
+                    </div>
+                );
+            },
+            (prev, next) =>
+                prev.item         === next.item         &&
+                prev.selected     === next.selected     &&
+                prev.subCellSize  === next.subCellSize  &&
+                prev.characterName === next.characterName &&
+                prev.badgeLayout  === next.badgeLayout
+        );
+
+        // Static grid background — memoized so it never re-renders during drag.
+        // Encumbrance zone colors are pure functions of column index (fixed thresholds),
+        // so this component has no dependency on any runtime state.
+        const GridBackground = React.memo(({ subRows, subCols, subCellSize, subDivisions }) => {
+            const rows = [];
+            for (let subRow = 0; subRow < subRows; subRow++) {
+                const cells = [];
+                const isTopBorder    = subRow % subDivisions === 0;
+                const isBottomBorder = subRow === subRows - 1;
+                for (let subCol = 0; subCol < subCols; subCol++) {
+                    const fullCellCol = Math.floor(subCol / subDivisions);
+                    const color = fullCellCol < 5 ? 'bg-blue-200' : fullCellCol < 10 ? 'bg-orange-200' : 'bg-red-200';
+                    cells.push(
+                        <div
+                            key={subCol}
+                            className={color}
+                            style={{
+                                width:        subCellSize,
+                                height:       subCellSize,
+                                borderTop:    isTopBorder                        ? '1px solid #9CA3AF' : '0.5px solid #D1D5DB',
+                                borderLeft:   subCol % subDivisions === 0        ? '1px solid #9CA3AF' : '0.5px solid #D1D5DB',
+                                borderRight:  subCol === subCols - 1             ? '1px solid #9CA3AF' : 'none',
+                                borderBottom: isBottomBorder                     ? '1px solid #9CA3AF' : 'none',
+                            }}
+                        />
+                    );
+                }
+                rows.push(<div key={subRow} className="flex">{cells}</div>);
+            }
+            return <>{rows}</>;
+        });
+
+        // Drag overlay: renders dragged item shape relative to its own bounding box.
+        // Position is set via initialTransform on mount, then updated by direct DOM style mutation
+        // from handleMove — no React re-renders during the drag.
+        const DragOverlay = React.memo(function DragOverlay({ dragVisual, subCellSize, cellSize, isSelected, helpersRef, overlayRef }) {
+            const { item, shape, bounds, initialTransform } = dragVisual;
+            const h      = helpersRef.current;
+            const darker = darkenColor(item.color);
+            const wSub   = bounds.maxCol - bounds.minCol + 1;
+            const hSub   = bounds.maxRow - bounds.minRow + 1;
+            const textDisplay = h.calculateItemTextDisplay(item, subCellSize);
+            return (
+                <div ref={overlayRef} className="fixed pointer-events-none"
+                    style={{ top: 0, left: 0, zIndex: 9999, willChange: 'transform', transform: initialTransform }}>
+                    {isSelected && shape.map((cell, idx) => {
+                        const comma = cell.indexOf(',');
+                        const r = parseInt(cell, 10), c = parseInt(cell.slice(comma + 1), 10);
+                        return (
+                            <div key={`ds-${idx}`}
+                                className={`absolute pointer-events-none ${getSelectionBorders(shape, r, c).join(' ')}`}
+                                style={{ width: subCellSize, height: subCellSize,
+                                    top:  (r - bounds.minRow) * subCellSize,
+                                    left: (c - bounds.minCol) * subCellSize,
+                                    borderColor: h.selectionColor }} />
+                        );
+                    })}
+                    {shape.map((cell, idx) => {
+                        const comma = cell.indexOf(',');
+                        const r = parseInt(cell, 10), c = parseInt(cell.slice(comma + 1), 10);
+                        return (
+                            <div key={`dc-${idx}`} className="absolute"
+                                style={{ width: subCellSize, height: subCellSize,
+                                    top:  (r - bounds.minRow) * subCellSize,
+                                    left: (c - bounds.minCol) * subCellSize,
+                                    backgroundColor: item.color, opacity: 0.8,
+                                    ...getItemBorderStyle(shape, r, c, darker) }} />
+                        );
+                    })}
+                    {renderTextOverlay(textDisplay, 0, 0, wSub * subCellSize, hSub * subCellSize, subCellSize, cellSize, 9999)}
+                </div>
+            );
+        }, (prev, next) =>
+            prev.dragVisual  === next.dragVisual  &&
+            prev.isSelected  === next.isSelected  &&
+            prev.subCellSize === next.subCellSize
+        );
 
         function CubeventoryTracker() {
             const [characters, setCharacters] = useState(() => {
@@ -276,6 +482,7 @@
             const [newItemMagical, setNewItemMagical] = useState(false);
             const [selectedItemId, setSelectedItemId] = useState(null);
             const [draggedItem, setDraggedItem] = useState(null);
+            const [activeDragId, setActiveDragId] = useState(null); // set only after DRAG_THRESHOLD crossed; gates stableItems & overlay
             const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
             const [dragStartPosition, setDragStartPosition] = useState(null);
             const [dragStartClient, setDragStartClient] = useState(null);
@@ -283,6 +490,7 @@
             const [panStart, setPanStart] = useState({ x: 0, y: 0 });
             const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 });
             const [draggedSlotPosition, setDraggedSlotPosition] = useState({ row: 0, col: 0 }); // position for ghost rendering of slot-dragged items
+            const [dragVisual, setDragVisual] = useState(null); // frozen snapshot used by DragOverlay; position updated via direct DOM, not React
             const [discardTarget,   setDiscardTarget]   = useState(null); // {id, name} while discard confirmation is open
             const [recycleBin,      setRecycleBin]      = useState(() => { try { return JSON.parse(localStorage.getItem('cubeventory_recycle') || '[]'); } catch { return []; } });
             const [showRecycleBin,  setShowRecycleBin]  = useState(false);
@@ -299,9 +507,17 @@
             const internalGridRef = useRef(null);
             const attachmentSlotRefs = useRef([]);
             const lastPaintedRef    = useRef(null);
-            const autoSaveTimerRef  = useRef(null);
+            const autoSaveTimerRef   = useRef(null);
             const deleteUndoTimerRef = useRef(null);
             const defaultLibraryRef  = useRef([]);
+            const dragRafRef         = useRef(null);   // rAF handle for throttled drag updates
+            const pendingDragPos     = useRef(null);   // latest drag position waiting for next frame
+            const itemHelpersRef     = useRef({});     // stable ref passed to PlacedGridItem; updated every render
+            const dragVisualRef      = useRef(null);   // mirrors dragVisual for use inside handleMove (avoids closure staleness)
+            const dragOverlayRef     = useRef(null);   // DOM ref for the DragOverlay container div
+            const activeDragIdRef    = useRef(null);   // mirrors activeDragId for sync access inside handleMove
+            const dragStartClientRef = useRef(null);   // {x,y} pixel position of pointerdown, for threshold check
+            const dragItemDataRef    = useRef(null);   // item snapshot saved at pointerdown for use when threshold fires
             const qrCodeRef      = useRef(null);
             const qrInstanceRef  = useRef(null);
             const videoRef       = useRef(null);
@@ -779,30 +995,6 @@
                     setNewItemWeight(String(item.weight));
                 }
                 setIsCreatingItem(true);
-            };
-
-            const getShapeBounds = (shape) => {
-                const coords = shape.map(cell => cell.split(',').map(Number));
-                const rows = coords.map(c => c[0]);
-                const cols = coords.map(c => c[1]);
-                return {
-                    minRow: Math.min(...rows),
-                    maxRow: Math.max(...rows),
-                    minCol: Math.min(...cols),
-                    maxCol: Math.max(...cols),
-                    centerRow: (Math.min(...rows) + Math.max(...rows)) / 2,
-                    centerCol: (Math.min(...cols) + Math.max(...cols)) / 2
-                };
-            };
-
-            // Returns the {r, c} of the topmost or bottommost occupied cell in the rightmost column.
-            // Guarantees badge placement lands on the item even for concave shapes.
-            const getBadgeAnchor = (shape, bounds, corner) => {
-                const cells = shape.map(s => { const [r, c] = s.split(',').map(Number); return { r, c }; });
-                const rightCells = cells.filter(cell => cell.c === bounds.maxCol);
-                return corner === 'top-right'
-                    ? rightCells.reduce((a, b) => a.r < b.r ? a : b)
-                    : rightCells.reduce((a, b) => a.r > b.r ? a : b);
             };
 
             const calculateInternalWeight = (container) => {
@@ -1592,6 +1784,9 @@
               dragOffsetRef.current = offset;
               draggedFromInternalRef.current = isInternalGrid;
               itemWasSelectedRef.current = (selectedItemId === item.id);
+              dragStartClientRef.current = { x: clientX, y: clientY };
+              dragItemDataRef.current    = item;
+              // activeDragId / dragVisual deferred until DRAG_THRESHOLD crossed in handleMove
 
               // Batch state updates
               setSelectedItemId(item.id);
@@ -1648,6 +1843,8 @@
                     if (!inContainer) { setOpenContainerId(null); setOverlayPosition(null); }
                   }
                   setDraggedItem(null);
+                  setActiveDragId(null);  activeDragIdRef.current = null;
+                  setDragVisual(null);    dragVisualRef.current   = null;
                   setDragStartPosition(null);
                   setDragStartClient(null);
                   setDraggedFromInternal(false);
@@ -1682,6 +1879,8 @@
 
                   // Clear drag state immediately after rotation
                   setDraggedItem(null);
+                  setActiveDragId(null);  activeDragIdRef.current = null;
+                  setDragVisual(null);    dragVisualRef.current   = null;
                   setDragStartPosition(null);
                   setDragStartClient(null);
                   setDraggedFromInternal(false);
@@ -2088,6 +2287,8 @@
                 }
 
                 setDraggedItem(null);
+                setActiveDragId(null);  activeDragIdRef.current = null;
+                setDragVisual(null);    dragVisualRef.current   = null;
                 setDragStartPosition(null);
                 setDragStartClient(null);
                 setDraggedFromInternal(false);
@@ -2562,47 +2763,98 @@
                     if (draggedItem) {
                         e.preventDefault();
 
-                        // Check if we're dragging from internal grid
+                        // --- Phase 1: threshold check — activate drag only after real movement ---
+                        if (!activeDragIdRef.current) {
+                            const sc = dragStartClientRef.current;
+                            if (!sc) return;
+                            const dx = clientX - sc.x, dy = clientY - sc.y;
+                            if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+
+                            // Threshold crossed — compute visual snapshot and activate
+                            const isInternal = draggedFromInternalRef.current;
+                            const gridEl     = isInternal ? internalGridRef.current : gridRef.current;
+                            if (!gridEl) return;
+                            const activationRect = gridEl.getBoundingClientRect();
+                            const activeItem = dragItemDataRef.current;
+                            if (!activeItem) return;
+
+                            const dragShape  = getScaledContainerShape(activeItem);
+                            const dragBounds = getShapeBounds(dragShape);
+                            const visual = {
+                                item:   activeItem,
+                                shape:  dragShape,
+                                bounds: dragBounds,
+                                initialTransform: `translate(${activationRect.left + (activeItem.position.col + dragBounds.minCol) * subCellSize}px, ${activationRect.top + (activeItem.position.row + dragBounds.minRow) * subCellSize}px)`,
+                            };
+                            dragVisualRef.current   = visual;
+                            activeDragIdRef.current = draggedItem;
+                            setDragVisual(visual);
+                            setActiveDragId(draggedItem);
+                            // Fall through to position update below
+                        }
+
+                        // --- Phase 2: active drag — compute new position, update overlay + queue state ---
+                        let pending  = null;
+                        let dragRect = null;  // saved so we can update the overlay DOM without a second getBoundingClientRect
+
                         if (draggedFromInternalRef.current && internalGridRef.current) {
-                            const rect = internalGridRef.current.getBoundingClientRect();
-                            let newCol = Math.round((clientX - rect.left - dragOffsetRef.current.x) / subCellSize);
-                            let newRow = Math.round((clientY - rect.top - dragOffsetRef.current.y) / subCellSize);
+                            dragRect = internalGridRef.current.getBoundingClientRect();
+                            pending = {
+                                type: 'internal',
+                                row: Math.round((clientY - dragRect.top  - dragOffsetRef.current.y) / subCellSize),
+                                col: Math.round((clientX - dragRect.left - dragOffsetRef.current.x) / subCellSize),
+                            };
+                        } else if (draggedFromSlotRef.current !== -1 && gridRef.current) {
+                            dragRect = gridRef.current.getBoundingClientRect();
+                            pending = {
+                                type: 'slot',
+                                row: Math.round((clientY - dragRect.top  - dragOffsetRef.current.y) / subCellSize),
+                                col: Math.round((clientX - dragRect.left - dragOffsetRef.current.x) / subCellSize),
+                            };
+                        } else if (gridRef.current) {
+                            dragRect = gridRef.current.getBoundingClientRect();
+                            pending = {
+                                type: 'main',
+                                row: Math.round((clientY - dragRect.top  - dragOffsetRef.current.y) / subCellSize),
+                                col: Math.round((clientX - dragRect.left - dragOffsetRef.current.x) / subCellSize),
+                            };
+                        }
 
-                            setPlacedItems(prev => {
-                                const container = prev.find(c => c.id === openContainerId);
-                                if (!container) return prev;
+                        // Direct DOM update — runs every pointermove, bypasses React entirely
+                        if (dragOverlayRef.current && dragVisualRef.current && dragRect && pending) {
+                            const { minRow, minCol } = dragVisualRef.current.bounds;
+                            dragOverlayRef.current.style.transform =
+                                `translate(${dragRect.left + (pending.col + minCol) * subCellSize}px, ${dragRect.top + (pending.row + minRow) * subCellSize}px)`;
+                        }
 
-                                return prev.map(c => c.id === openContainerId ? {
-                                    ...c,
-                                    internalGrid: c.internalGrid.map(i => i.id === draggedItem ?
-                                        { ...i, position: { row: newRow, col: newCol } } : i)
-                                } : c);
+                        pendingDragPos.current = pending;
+                        if (!dragRafRef.current) {
+                            dragRafRef.current = requestAnimationFrame(() => {
+                                dragRafRef.current = null;
+                                const p = pendingDragPos.current;
+                                if (!p) return;
+                                if (p.type === 'internal') {
+                                    setPlacedItems(prev => {
+                                        const container = prev.find(c => c.id === openContainerId);
+                                        if (!container) return prev;
+                                        return prev.map(c => c.id === openContainerId ? {
+                                            ...c,
+                                            internalGrid: c.internalGrid.map(i => i.id === draggedItem ?
+                                                { ...i, position: { row: p.row, col: p.col } } : i)
+                                        } : c);
+                                    });
+                                } else if (p.type === 'slot') {
+                                    setDraggedSlotPosition({ row: p.row, col: p.col });
+                                } else {
+                                    setPlacedItems(prev =>
+                                        prev.map(item =>
+                                            item.id === draggedItem
+                                                ? { ...item, position: { row: p.row, col: p.col } }
+                                                : item
+                                        )
+                                    );
+                                }
                             });
-                            return;
-                        }
-
-                        // Check if we're dragging from an attachment slot
-                        if (draggedFromSlotRef.current !== -1 && gridRef.current) {
-                            const rect = gridRef.current.getBoundingClientRect();
-                            const newCol = Math.round((clientX - rect.left - dragOffsetRef.current.x) / subCellSize);
-                            const newRow = Math.round((clientY - rect.top - dragOffsetRef.current.y) / subCellSize);
-                            setDraggedSlotPosition({ row: newRow, col: newCol });
-                            return;
-                        }
-
-                        // Main grid dragging
-                        if (gridRef.current) {
-                            const rect = gridRef.current.getBoundingClientRect();
-                            let newCol = Math.round((clientX - rect.left - dragOffsetRef.current.x) / subCellSize);
-                            let newRow = Math.round((clientY - rect.top - dragOffsetRef.current.y) / subCellSize);
-
-                            setPlacedItems(prev =>
-                                prev.map(item =>
-                                    item.id === draggedItem
-                                        ? { ...item, position: { row: newRow, col: newCol } }
-                                        : item
-                                )
-                            );
                         }
                         return;
                     }
@@ -2615,6 +2867,12 @@
                 };
 
                 const handleEnd = (e) => {
+                    // Cancel any pending rAF drag update before processing the drop
+                    if (dragRafRef.current) {
+                        cancelAnimationFrame(dragRafRef.current);
+                        dragRafRef.current = null;
+                    }
+                    pendingDragPos.current = null;
                     if (draggedItem || isPanning) {
                         handlePointerEnd(e);
                     }
@@ -2630,6 +2888,14 @@
                     window.removeEventListener('pointercancel', handleEnd);
                 };
             }, [draggedItem, isPanning, openContainerId, subCellSize, scrollOffset, panStart]);
+
+            // Safety net: ensure overlay state is cleared if drag ends via any unlisted path
+            useEffect(() => {
+                if (!draggedItem) {
+                    setDragVisual(null);    dragVisualRef.current   = null;
+                    setActiveDragId(null);  activeDragIdRef.current = null;
+                }
+            }, [draggedItem]);
 
             useEffect(() => {
                 if (!isCreatingItem || !creationGridRef.current) return;
@@ -3663,6 +3929,41 @@
                 </div>
             );
 
+            // Stable items = everything except whatever is currently being dragged.
+            // Separating this memo means mainGridOccupancy only recomputes when items
+            // are actually placed/removed, NOT on every drag-position frame update.
+            const stableItems = useMemo(
+                () => placedItems.filter(item => item.id !== activeDragId),
+                [placedItems, activeDragId]
+            );
+
+            // Occupancy map built from stable (non-dragged) items only.
+            const mainGridOccupancy = useMemo(() => {
+                const occ = {};
+                stableItems.forEach(item => {
+                    getScaledContainerShape(item).forEach(cell => {
+                        const comma = cell.indexOf(',');
+                        const absRow = item.position.row + parseInt(cell, 10);
+                        const absCol = item.position.col + parseInt(cell.slice(comma + 1), 10);
+                        const key = `${absRow},${absCol}`;
+                        occ[key] = (occ[key] || 0) + 1;
+                    });
+                });
+                return occ;
+            }, [stableItems]);
+
+            // Update helpers ref every render so PlacedGridItem always reads current values
+            // without those values needing to be in the memo equality check.
+            itemHelpersRef.current = {
+                getScaledContainerShape,
+                calculateItemTextDisplay,
+                mainGridOccupancy,
+                selectionColor,
+                discardTarget,
+                setSelectedItemId,
+                handleItemDragStart,
+            };
+
             return (
                 <div className={`min-h-screen bg-gray-50 dark:bg-gray-900 dark:bg-gray-950 text-gray-900 dark:text-gray-100
                      transition-colors duration-200`}>
@@ -4201,172 +4502,36 @@
                             <p className="text-xs text-gray-600 mb-2">Tap to select/rotate. Drag selected item to move. Two-finger drag without item selected to pan.</p>
                             <div ref={gridContainerRef} className="overflow-auto" style={{ touchAction: 'none', paddingBottom: subCellSize * 1.5 }}>
                                 <div ref={gridRef} className="relative inline-block" onMouseDown={handleBackgroundPointerDown} onTouchStart={handleBackgroundPointerDown}>
-                                    {(() => {
-                                        const occupancy = {};
-                                        placedItems.filter(item => item.id !== draggedItem).forEach((item) => {
-                                          const shape = getScaledContainerShape(item);
-                                          shape.forEach((cell) => {
-                                            const [r, c] = cell.split(',').map(Number);
-                                            const absRow = item.position.row + r;
-                                            const absCol = item.position.col + c;
-                                            const key = `${absRow},${absCol}`;
-                                            occupancy[key] = (occupancy[key] || 0) + 1;
-                                          });
-                                        });
-                                        return (
-                                            <>
-                                                {[...Array(GRID_SUB_ROWS)].map((_, subRow) => (
-                                                  <div key={subRow} className="flex">
-                                                    {[...Array(GRID_SUB_COLS)].map((_, subCol) => {
-                                                      const fullCellRow = Math.floor(subRow / SUB_DIVISIONS);
-                                                      const fullCellCol = Math.floor(subCol / SUB_DIVISIONS);
-                                                      const key = `${subRow},${subCol}`;
-                                                      const hasOverlap = (occupancy[key] || 0) > 1;
-
-                                                      // Determine border styling for sub-cell boundaries vs full-cell boundaries
-                                                      const isTopFullBoundary = subRow % SUB_DIVISIONS === 0;
-                                                      const isLeftFullBoundary = subCol % SUB_DIVISIONS === 0;
-                                                      const isBottomFullBoundary = subRow === GRID_SUB_ROWS - 1;
-                                                      const isRightFullBoundary = subCol === GRID_SUB_COLS - 1;
-
-                                                      return (
-                                                        <div
-                                                          key={subCol}
-                                                          className={hasOverlap ? 'bg-red-500' : getCellColor(fullCellCol)}
-                                                          style={{
-                                                            width: subCellSize,
-                                                            height: subCellSize,
-                                                            borderTop: isTopFullBoundary ? '1px solid #9CA3AF' : '0.5px solid #D1D5DB',
-                                                            borderLeft: isLeftFullBoundary ? '1px solid #9CA3AF' : '0.5px solid #D1D5DB',
-                                                            borderRight: isRightFullBoundary ? '1px solid #9CA3AF' : 'none',
-                                                            borderBottom: isBottomFullBoundary ? '1px solid #9CA3AF' : 'none'
-                                                          }}
-                                                        />
-                                                      );
-                                                    })}
-                                                  </div>
-                                                ))}
-                                                
-                                                {placedItems.filter(item => item.id !== draggedItem).map(item => {
-                                                  const selected = selectedItemId === item.id;
-                                                  const shape = getScaledContainerShape(item);
-                                                  const bounds = getShapeBounds(shape);
-                                                  const itemWidthSub = bounds.maxCol - bounds.minCol + 1;
-                                                  const itemHeightSub = bounds.maxRow - bounds.minRow + 1;
-                                                  const itemWidth = itemWidthSub * subCellSize;
-                                                  const itemHeight = itemHeightSub * subCellSize;
-
-                                                  const textDisplay = calculateItemTextDisplay(item, subCellSize);
-
-                                                  return (
-                                                    <div key={item.id} className="absolute top-0 left-0 pointer-events-none">
-                                                      {selected && shape.map((cell, idx) => {
-                                                        const [r, c] = cell.split(',').map(Number);
-                                                        const absRow = item.position.row + r;
-                                                        const absCol = item.position.col + c;
-                                                        const borders = getSelectionBorders(shape, r, c);
-                                                        return (
-                                                          <div
-                                                            key={`highlight-${idx}`}
-                                                            className={`absolute pointer-events-none ${borders.join(' ')}`}
-                                                            style={{
-                                                              width: subCellSize,
-                                                              height: subCellSize,
-                                                              top: absRow * subCellSize,
-                                                              left: absCol * subCellSize,
-                                                              borderColor: selectionColor,
-                                                              zIndex: draggedItem === item.id ? 100 : 2
-                                                            }}
-                                                          />
-                                                        );
-                                                      })}
-                                                      {selected && renderConcaveCornerFillers(shape, item.position, subCellSize, selectionColor, draggedItem === item.id ? 100 : 2, `main-${item.id}`)}
-
-                                                      <div
-                                                        className={
-                                                          item.magical
-                                                            ? 'magical-glow absolute inset-0 pointer-events-none'
-                                                            : 'absolute inset-0 pointer-events-none'
-                                                        }
-                                                        style={item.magical ? { '--mc': item.magicalColor || '#a855f7' } : undefined}
-                                                      >
-                                                      {shape.map((cell, idx) => {
-                                                        const [r, c] = cell.split(',').map(Number);
-                                                        const absRow = item.position.row + r;
-                                                        const absCol = item.position.col + c;
-                                                        const key = `${absRow},${absCol}`;
-                                                        const isOverlapping = (occupancy[key] || 0) > 1;
-                                                        return (
-                                                          <div
-                                                            key={idx}
-                                                            className="absolute pointer-events-auto cursor-pointer"
-                                                            style={{
-                                                              width: subCellSize,
-                                                              height: subCellSize,
-                                                              top: absRow * subCellSize,
-                                                              left: absCol * subCellSize,
-                                                              backgroundColor: isOverlapping ? '#EF4444' : item.color,
-                                                              opacity: isOverlapping ? 1 : 0.8,
-                                                              zIndex: draggedItem === item.id ? 100 : 1,
-                                                              touchAction: 'none',
-                                                              ...getItemBorderStyle(shape, r, c, darkenColor(item.color)),
-                                                            }}
-                                                            onClick={(e) => {
-                                                              e.stopPropagation();
-                                                              if (!discardTarget) setSelectedItemId(item.id);
-                                                            }}
-                                                            onPointerDown={(e) => {
-                                                              e.target.setPointerCapture(e.pointerId);
-                                                              handleItemDragStart(e, item);
-                                                            }}
-                                                          />
-                                                        );
-                                                      })}
-                                                      </div>
-
-                                                      {(() => {
-                                                        const hasAttune = item.requiresAttunement;
-                                                        const hasNotes = !!(item.notes && item.notes.trim());
-                                                        if (!hasAttune && !hasNotes) return null;
-                                                        const bs = Math.max(10, Math.floor(subCellSize * 0.5));
-                                                        const inset = 2;
-                                                        const gap = 1;
-                                                        const anchor = getBadgeAnchor(shape, bounds, 'top-right');
-                                                        const zIdx = draggedItem === item.id ? 101 : 3;
-                                                        const attuneFilter = 'drop-shadow(0 0 2px rgba(0,0,0,0.9))';
-                                                        const notesFilter  = 'drop-shadow(0 0 2px rgba(0,0,0,0.9))';
-                                                        const anchorTop  = (item.position.row + anchor.r) * subCellSize + inset;
-                                                        const anchorLeft = (item.position.col + anchor.c + 1) * subCellSize - bs - inset;
-                                                        const mkBadge = (icon, color, top, left, filter) => (
-                                                          <div className="absolute pointer-events-none" style={{ top, left, zIndex: zIdx, color, lineHeight: 0, filter }}>
-                                                            {icon}
-                                                          </div>
-                                                        );
-                                                        if (hasAttune && hasNotes) {
-                                                          const isAttuned = item.attunedTo === characterName;
-                                                          const s2Top  = badgeLayout === 'vertical' ? anchorTop + bs + gap : anchorTop;
-                                                          const s2Left = badgeLayout === 'vertical' ? anchorLeft : anchorLeft - bs - gap;
-                                                          return <>{mkBadge(<NoteEdit size={bs}/>, '#ffffff', anchorTop, anchorLeft, notesFilter)}{mkBadge(<AttuneIcon size={bs} outline={!isAttuned}/>, isAttuned ? '#f59e0b' : '#fbbf24', s2Top, s2Left, attuneFilter)}</>;
-                                                        }
-                                                        if (hasAttune) {
-                                                          const isAttuned = item.attunedTo === characterName;
-                                                          return mkBadge(<AttuneIcon size={bs} outline={!isAttuned}/>, isAttuned ? '#f59e0b' : '#fbbf24', anchorTop, anchorLeft, attuneFilter);
-                                                        }
-                                                        return mkBadge(<NoteEdit size={bs}/>, '#ffffff', anchorTop, anchorLeft, notesFilter);
-                                                      })()}
-                                                      {renderTextOverlay(
-                                                        textDisplay,
-                                                        (item.position.row + bounds.minRow) * subCellSize,
-                                                        (item.position.col + bounds.minCol) * subCellSize,
-                                                        itemWidth, itemHeight, subCellSize, cellSize,
-                                                        draggedItem === item.id ? 100 : 1
-                                                      )}
-                                                    </div>
-                                                  );
+                                    <>
+                                                <GridBackground
+                                                    subRows={GRID_SUB_ROWS}
+                                                    subCols={GRID_SUB_COLS}
+                                                    subCellSize={subCellSize}
+                                                    subDivisions={SUB_DIVISIONS}
+                                                />
+                                                {Object.entries(mainGridOccupancy).filter(([, count]) => count > 1).map(([key]) => {
+                                                    const comma = key.indexOf(',');
+                                                    const r = parseInt(key, 10);
+                                                    const c = parseInt(key.slice(comma + 1), 10);
+                                                    return (
+                                                        <div key={key} className="absolute bg-red-500 pointer-events-none"
+                                                            style={{ top: r * subCellSize, left: c * subCellSize, width: subCellSize, height: subCellSize, zIndex: 0 }} />
+                                                    );
                                                 })}
+                                                
+                                                {stableItems.map(item => (
+                                                    <PlacedGridItem
+                                                        key={item.id}
+                                                        item={item}
+                                                        selected={selectedItemId === item.id}
+                                                        subCellSize={subCellSize}
+                                                        cellSize={cellSize}
+                                                        characterName={characterName}
+                                                        badgeLayout={badgeLayout}
+                                                        helpersRef={itemHelpersRef}
+                                                    />
+                                                ))}
                                             </>
-                                        );
-                                    })()}
                                 </div>
                             </div>
                         </div>
@@ -4745,7 +4910,10 @@
                                             draggedFromInternalRef.current = false;
 
                                             // Offset of zero means item top-left follows cursor
-                                            dragOffsetRef.current = { x: 0, y: 0 };
+                                            dragOffsetRef.current    = { x: 0, y: 0 };
+                                            dragStartClientRef.current = { x: e.clientX, y: e.clientY };
+                                            dragItemDataRef.current    = occupiedItem;
+                                            // activeDragId / dragVisual deferred until DRAG_THRESHOLD crossed in handleMove
 
                                             setDraggedSlotPosition({ row: initRow, col: initCol });
                                             setDragOffset({ x: 0, y: 0 });
@@ -5702,7 +5870,7 @@
                                 </div>
                                 {recycleBin.length > 0 && (
                                     <div className="px-4 py-3 border-t flex-shrink-0">
-                                        <button onClick={() => { setRecycleBin([]); try { localStorage.removeItem('cubeventory_recycle'); } catch {} }}
+                                        <button onClick={() => { if (!window.confirm(`Permanently delete all ${recycleBin.length} item${recycleBin.length === 1 ? '' : 's'} in the recycle bin?`)) return; setRecycleBin([]); try { localStorage.removeItem('cubeventory_recycle'); } catch {} }}
                                             className="w-full bg-red-100 text-red-600 py-2 rounded text-sm hover:bg-red-200">
                                             Clear All
                                         </button>
@@ -5773,93 +5941,17 @@
                         </div>
                     )}
 
-                    {/* Render dragged item at document level (works for both main and internal grid) */}
-                    {draggedItem && (() => {
-                      let item, gridRect, sourceSubCellSize;
-
-                      if (draggedFromInternalRef.current && openContainerId) {
-                        // Item from internal grid
-                        const container = placedItems.find(c => c.id === openContainerId);
-                        item = container?.internalGrid.find(i => i.id === draggedItem);
-                        gridRect = internalGridRef.current?.getBoundingClientRect();
-                        sourceSubCellSize = subCellSize;
-                      } else if (draggedFromSlotRef.current !== -1 && draggedSlotItemRef.current) {
-                        // Item being dragged from an attachment slot
-                        item = { ...draggedSlotItemRef.current, position: draggedSlotPosition };
-                        gridRect = gridRef.current?.getBoundingClientRect();
-                        sourceSubCellSize = subCellSize;
-                      } else {
-                        // Item from main grid
-                        item = placedItems.find(i => i.id === draggedItem);
-                        gridRect = gridRef.current?.getBoundingClientRect();
-                        sourceSubCellSize = subCellSize;
-                      }
-
-                      if (!item || !gridRect) {
-                        console.error('FAILED to render dragged item:', { item: !!item, gridRect: !!gridRect });
-                        return null;
-                      }
-
-                      const shape = getScaledContainerShape(item);
-                      const bounds = getShapeBounds(shape);
-                      const selected = selectedItemId === item.id;
-
-                      const itemWidth  = (bounds.maxCol - bounds.minCol + 1) * sourceSubCellSize;
-                      const itemHeight = (bounds.maxRow - bounds.minRow + 1) * sourceSubCellSize;
-                      const textDisplay = calculateItemTextDisplay(item, sourceSubCellSize);
-
-                      return (
-                        <div className="fixed top-0 left-0 pointer-events-none" style={{ zIndex: 9999 }}>
-                          {selected && shape.map((cell, idx) => {
-                            const [r, c] = cell.split(',').map(Number);
-                            const absRow = item.position.row + r;
-                            const absCol = item.position.col + c;
-                            const borders = getSelectionBorders(shape, r, c);
-                            return (
-                              <div
-                                key={`drag-highlight-${idx}`}
-                                className={`absolute ${borders.join(' ')}`}
-                                style={{
-                                  width: sourceSubCellSize,
-                                  height: sourceSubCellSize,
-                                  top: gridRect.top + (absRow * sourceSubCellSize),
-                                  left: gridRect.left + (absCol * sourceSubCellSize),
-                                  borderColor: selectionColor,
-                                }}
-                              />
-                            );
-                          })}
-
-                          {shape.map((cell, idx) => {
-                            const [r, c] = cell.split(',').map(Number);
-                            const absRow = item.position.row + r;
-                            const absCol = item.position.col + c;
-                            return (
-                              <div
-                                key={`drag-cell-${idx}`}
-                                className="absolute"
-                                style={{
-                                  width: sourceSubCellSize,
-                                  height: sourceSubCellSize,
-                                  top: gridRect.top + (absRow * sourceSubCellSize),
-                                  left: gridRect.left + (absCol * sourceSubCellSize),
-                                  backgroundColor: item.color,
-                                  opacity: 0.8,
-                                  ...getItemBorderStyle(shape, r, c, darkenColor(item.color)),
-                                }}
-                              />
-                            );
-                          })}
-
-                          {renderTextOverlay(
-                            textDisplay,
-                            gridRect.top  + ((item.position.row + bounds.minRow) * sourceSubCellSize),
-                            gridRect.left + ((item.position.col + bounds.minCol) * sourceSubCellSize),
-                            itemWidth, itemHeight, sourceSubCellSize, cellSize
-                          )}
-                        </div>
-                      );
-                    })()}
+                    {/* Drag overlay: rendered once at drag start, repositioned via direct DOM style mutation */}
+                    {dragVisual && (
+                        <DragOverlay
+                            dragVisual={dragVisual}
+                            subCellSize={subCellSize}
+                            cellSize={cellSize}
+                            isSelected={selectedItemId === dragVisual.item.id}
+                            helpersRef={itemHelpersRef}
+                            overlayRef={dragOverlayRef}
+                        />
+                    )}
                 </div>
             );
         }
