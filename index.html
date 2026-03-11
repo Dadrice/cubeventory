@@ -63,6 +63,7 @@
         const Plus = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
         const Trash2 = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>;
         const FlipHorizontal = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/><path d="M12 20v2"/><path d="M12 14v2"/><path d="M12 8v2"/><path d="M12 2v2"/></svg>;
+        const RotateCw = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2v6h-6"/><path d="M21 13a9 9 0 1 1-3-7.7L21 8"/></svg>;
         const ArrowDownToLine = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="3" x2="12" y2="15"/><polyline points="8 11 12 15 16 11"/><line x1="4" y1="20" x2="20" y2="20"/></svg>;
         const NoteEdit = ({ size = 24 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
         const AttuneIcon = ({ size = 24, outline = false }) => <svg width={size} height={size} viewBox="0 0 24 24" fill={outline ? 'none' : 'currentColor'} stroke={outline ? 'currentColor' : 'none'} strokeWidth={outline ? 1.5 : 0}><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>;
@@ -330,6 +331,7 @@
             },
             (prev, next) =>
                 prev.item         === next.item         &&
+                prev.overlapKey   === next.overlapKey   &&
                 prev.selected     === next.selected     &&
                 prev.subCellSize  === next.subCellSize  &&
                 prev.characterName === next.characterName &&
@@ -367,6 +369,106 @@
             }
             return <>{rows}</>;
         });
+
+        // ── Auto-sort pure utilities ──────────────────────────────────────────────
+
+        // Shift a shape so its top-left cell is at (0,0)
+        const normalizeShape = (shape) => {
+            let minRow = Infinity, minCol = Infinity;
+            for (const cell of shape) {
+                const comma = cell.indexOf(',');
+                const r = parseInt(cell, 10), c = parseInt(cell.slice(comma + 1), 10);
+                if (r < minRow) minRow = r;
+                if (c < minCol) minCol = c;
+            }
+            return shape.map(cell => {
+                const comma = cell.indexOf(',');
+                return `${parseInt(cell, 10) - minRow},${parseInt(cell.slice(comma + 1), 10) - minCol}`;
+            });
+        };
+
+        // 90° clockwise rotation: (r,c) → (c, −r), then re-normalize to (0,0)
+        const rotateShape90 = (shape) => {
+            const cells = shape.map(s => { const comma = s.indexOf(','); return [parseInt(s, 10), parseInt(s.slice(comma + 1), 10)]; });
+            const rotated = cells.map(([r, c]) => [c, -r]);
+            const minRow = Math.min(...rotated.map(([r]) => r));
+            const minCol = Math.min(...rotated.map(([, c]) => c));
+            return rotated.map(([r, c]) => `${r - minRow},${c - minCol}`);
+        };
+
+        // Apply n × 90° clockwise rotations to a shape (rotateShape90 already normalizes)
+        const applyContainerRotation = (shape, n) => {
+            if (!n) return shape;
+            let s = shape;
+            for (let i = 0; i < (n % 4); i++) s = rotateShape90(s);
+            return s;
+        };
+
+        // Return all unique orientations (1–4 rotations; symmetric shapes give fewer)
+        const getAllRotations = (baseShape) => {
+            const rotations = [];
+            const seen = new Set();
+            let cur = normalizeShape(baseShape);
+            for (let i = 0; i < 4; i++) {
+                const key = cur.slice().sort().join('|');
+                if (!seen.has(key)) { seen.add(key); rotations.push(cur); }
+                cur = rotateShape90(cur);
+            }
+            return rotations;
+        };
+
+        // Mirror a shape left-right (reflection along vertical axis)
+        const flipShape = (shape) => {
+            const cells = shape.map(s => { const comma = s.indexOf(','); return [parseInt(s, 10), parseInt(s.slice(comma + 1), 10)]; });
+            const maxCol = Math.max(...cells.map(([, c]) => c));
+            return normalizeShape(cells.map(([r, c]) => `${r},${maxCol - c}`));
+        };
+
+        // All unique orientations: 4 rotations × horizontal flip = up to 8 distinct shapes
+        const getAllOrientations = (shape) => {
+            const rots = getAllRotations(shape);
+            const seen = new Set();
+            return [...rots, ...rots.map(flipShape)].filter(s => {
+                const key = s.slice().sort().join('|');
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+        };
+
+        // Try to place a normalized shape in a grid cell-by-cell.
+        // Scans rows top→bottom (fromBottom=false) or bottom→top (fromBottom=true).
+        // bandStart/bandEnd (sub-col indices, exclusive end) restrict to a tier; pass null for full grid.
+        // Returns {row, col} of anchor or null if no position found.
+        const tryPlaceShape = (shape, occupancy, subRows, subCols, fromBottom, bandStart, bandEnd) => {
+            const b = getShapeBounds(shape);  // shape is normalized so minRow=minCol=0
+            const h = b.maxRow + 1;
+            const w = b.maxCol + 1;
+            const colMin = bandStart ?? 0;
+            const colMax = (bandEnd ?? subCols) - w;
+            if (colMax < colMin) return null;   // shape too wide for this band
+
+            const rowFirst = fromBottom ? subRows - h : 0;
+            const rowLast  = fromBottom ? 0 : subRows - h;
+            const rowStep  = fromBottom ? -1 : 1;
+
+            for (let row = rowFirst; fromBottom ? row >= rowLast : row <= rowLast; row += rowStep) {
+                nextCol:
+                for (let col = colMin; col <= colMax; col++) {
+                    for (const cell of shape) {
+                        const comma = cell.indexOf(',');
+                        const r = parseInt(cell, 10) + row;
+                        const c = parseInt(cell.slice(comma + 1), 10) + col;
+                        if (c < colMin || c >= (bandEnd ?? subCols)) { continue nextCol; }
+                        if (occupancy.has(`${r},${c}`)) { continue nextCol; }
+                    }
+                    return { row, col };
+                }
+            }
+            return null;
+        };
+
+        // ─────────────────────────────────────────────────────────────────────────
 
         // Drag overlay: renders dragged item shape relative to its own bounding box.
         // Position is set via initialTransform on mount, then updated by direct DOM style mutation
@@ -501,6 +603,7 @@
             const [isPainting, setIsPainting] = useState(false);
             const [paintMode, setPaintMode] = useState(null); // 'add' or 'remove'
             const fileInputRef = useRef(null);
+            const libraryFileInputRef = useRef(null);
             const gridRef = useRef(null);
             const gridContainerRef = useRef(null);
             const creationGridRef = useRef(null);
@@ -634,6 +737,7 @@
             });
 
             const [overlayPosition, setOverlayPosition] = useState(null);
+            const [isSorting,       setIsSorting]       = useState(false);
             const [isDraggingOverlay, setIsDraggingOverlay] = useState(false);
             const [overlayDragStart, setOverlayDragStart] = useState({ x: 0, y: 0 });
 
@@ -1062,7 +1166,7 @@
                   } else {
                       w = item.currentWeight ?? item.emptyWeight;
                   }
-                  return getAutoScaleShape(w, gridContext);
+                  return applyContainerRotation(getAutoScaleShape(w, gridContext), item.rotation);
               }
 
               let currentWeight;
@@ -1095,7 +1199,7 @@
                     }
                   }
                 }
-                return shape; // normalized 0-based; bypasses generic expand/trim
+                return applyContainerRotation(shape, item.rotation); // normalized 0-based; bypasses generic expand/trim
               } else if (item.containerType === 'stacked') {
                 const sbounds   = getShapeBounds(item.shape);
                 const bHeight   = sbounds.maxRow - sbounds.minRow + 1;  // base shape height in sub-rows
@@ -1147,7 +1251,7 @@
               if (targetSubCells >= baseSubCells) {
                 const cellsToAdd = targetSubCells - baseSubCells;
 
-                if (cellsToAdd === 0) return normalized; // No change needed
+                if (cellsToAdd === 0) return item.containerType === 'grid' ? applyContainerRotation(normalized, item.rotation) : normalized; // No change needed
 
                 const expandedShape = [...normalized];
 
@@ -1169,7 +1273,7 @@
                     currentRow++;
                   }
 
-                  return expandedShape;
+                  return applyContainerRotation(expandedShape, item.rotation);
                 } else {
                   // Quantity/coinpurse: expand based on scale direction (coinpurse defaults to vertical)
                   const scaleDir = item.scaleDirection || 'vertical';
@@ -1257,7 +1361,7 @@
                 }
               }
 
-              return trimmedShape;
+              return item.containerType === 'grid' ? applyContainerRotation(trimmedShape, item.rotation) : trimmedShape;
             };
 
             // --- Grid utility functions ---
@@ -1295,57 +1399,89 @@
             };
 
             const rotateItem = (itemId) => {
-                // Check if item is in an internal grid
+                const doRotate = (item, subRows, subCols) => {
+                    // stacked: rotate base shape + toggle fill direction
+                    if (item.containerType === 'stacked') {
+                        const rotatedShape = rotateShape90(item.shape);
+                        const newDir = (item.scaleDirection || 'horizontal') === 'horizontal' ? 'vertical' : 'horizontal';
+                        const updatedItem = { ...item, shape: rotatedShape, scaleDirection: newDir };
+                        const newBounds = getShapeBounds(getScaledContainerShape(updatedItem));
+                        const { row, col } = clampPosition(item.position.row, item.position.col, newBounds, subRows, subCols);
+                        return { ...updatedItem, position: { row, col } };
+                    }
+                    // non-auto-fill quantity: rotate base shape + toggle scale direction
+                    if (item.containerType === 'quantity' && item.scaleMode !== 'auto-fill') {
+                        const rotatedShape = rotateShape90(item.shape);
+                        const newDir = (item.scaleDirection || 'vertical') === 'vertical' ? 'horizontal' : 'vertical';
+                        const updatedItem = { ...item, shape: rotatedShape, scaleDirection: newDir };
+                        const newBounds = getShapeBounds(getScaledContainerShape(updatedItem));
+                        const { row, col } = clampPosition(item.position.row, item.position.col, newBounds, subRows, subCols);
+                        return { ...updatedItem, position: { row, col } };
+                    }
+                    // coinpurse, auto-fill, non-auto-fill grid: increment rotation flag; shape recomputed by getScaledContainerShape
+                    if (item.containerType !== null) {
+                        const newRotation = ((item.rotation || 0) + 1) % 4;
+                        const newShape = getScaledContainerShape({ ...item, rotation: newRotation });
+                        const newBounds = getShapeBounds(newShape);
+                        const { row, col } = clampPosition(item.position.row, item.position.col, newBounds, subRows, subCols);
+                        return { ...item, rotation: newRotation, position: { row, col } };
+                    }
+                    // non-container: rotate shape directly
+                    const rotatedShape = rotateShape90(item.shape);
+                    const newBounds = getShapeBounds(rotatedShape);
+                    const { row, col } = clampPosition(item.position.row, item.position.col, newBounds, subRows, subCols);
+                    return { ...item, shape: rotatedShape, position: { row, col } };
+                };
+
                 if (openContainerId) {
                     const container = placedItems.find(c => c.id === openContainerId);
                     const internalItem = container?.internalGrid.find(i => i.id === itemId);
-
                     if (internalItem) {
+                        const { subRows, subCols } = getInternalDimensions(container);
                         setPlacedItems(prev => prev.map(c => {
-                            if (c.id === openContainerId) {
-                                const bounds = getShapeBounds(internalItem.shape);
-                                const rotatedShape = internalItem.shape.map(cell => {
-                                    const [r, c] = cell.split(',').map(Number);
-                                    const relR = r - bounds.centerRow;
-                                    const relC = c - bounds.centerCol;
-                                    return `${Math.round(relC + bounds.centerRow)},${Math.round(-relR + bounds.centerCol)}`;
-                                });
-                                const newBounds = getShapeBounds(rotatedShape);
-                                const { subRows: internalSubRows, subCols: internalSubCols } = getInternalDimensions(c);
-                                const { row: newRow, col: newCol } = clampPosition(
-                                  internalItem.position.row, internalItem.position.col, newBounds, internalSubRows, internalSubCols
-                                );
-
-                                return {
-                                    ...c,
-                                    internalGrid: c.internalGrid.map(i => i.id === itemId ?
-                                        { ...i, shape: rotatedShape, position: { row: newRow, col: newCol } } : i)
-                                };
-                            }
-                            return c;
+                            if (c.id !== openContainerId) return c;
+                            return { ...c, internalGrid: c.internalGrid.map(i => i.id === itemId ? doRotate(i, subRows, subCols) : i) };
                         }));
                         return;
                     }
                 }
 
-                // Original main grid rotation logic
                 setPlacedItems(prev => prev.map(item => {
-                    if (item.id === itemId && item.containerType === null) {
-                        const bounds = getShapeBounds(item.shape);
-                        const rotatedShape = item.shape.map(cell => {
-                            const [r, c] = cell.split(',').map(Number);
-                            const relR = r - bounds.centerRow;
-                            const relC = c - bounds.centerCol;
-                            return `${Math.round(relC + bounds.centerRow)},${Math.round(-relR + bounds.centerCol)}`;
-                        });
-                        const newBounds = getShapeBounds(rotatedShape);
-                        const { row: newRow, col: newCol } = clampPosition(
-                          item.position.row, item.position.col, newBounds, GRID_SUB_ROWS, GRID_SUB_COLS
-                        );
-                        return { ...item, shape: rotatedShape, position: { row: newRow, col: newCol } };
-                    }
-                    return item;
+                    if (item.id !== itemId) return item;
+                    if (item.containerType !== null && !isContainerRotatable(item)) return item;
+                    return doRotate(item, GRID_SUB_ROWS, GRID_SUB_COLS);
                 }));
+            };
+
+            // Returns true if a container's max possible shape fits within the 5×5-cell (10×10 sub-cell)
+            // rotation-safe threshold — guarantees neither orientation can breach an encumbrance tier.
+            const isContainerRotatable = (item) => {
+                const MAX_DIM = 5 * SUB_DIVISIONS; // 10 sub-cells = 5 cells
+                if (item.scaleMode === 'auto-fill') {
+                    const maxW = item.containerType === 'grid'
+                        ? item.emptyWeight + (item.internalCapacity || 0)
+                        : (item.currentWeight ?? item.emptyWeight);
+                    const maxShape = getAutoScaleShape(maxW);
+                    const b = getShapeBounds(maxShape);
+                    return (b.maxRow + 1) <= MAX_DIM && (b.maxCol + 1) <= MAX_DIM;
+                }
+                if (item.containerType === 'coinpurse') {
+                    const maxCols = item.maxColumns || COINPURSE_MAX_POUCHES;
+                    const colCap  = item.columnCap  || COINPURSE_POUCH_CAP;
+                    return (maxCols * SUB_DIVISIONS) <= MAX_DIM &&
+                           Math.ceil((item.emptyWeight + colCap) * SUB_DIVISIONS) <= MAX_DIM;
+                }
+                if (item.containerType === 'stacked' || item.containerType === 'quantity') {
+                    const b = getShapeBounds(item.shape);
+                    return (b.maxRow - b.minRow + 1) <= MAX_DIM && (b.maxCol - b.minCol + 1) <= MAX_DIM;
+                }
+                // non-auto-fill grid: check max shape at full capacity
+                if (item.containerType === 'grid') {
+                    const maxShape = getAutoScaleShape(item.emptyWeight + (item.internalCapacity || 0));
+                    const b = getShapeBounds(maxShape);
+                    return (b.maxRow + 1) <= MAX_DIM && (b.maxCol + 1) <= MAX_DIM;
+                }
+                return false;
             };
 
             const flipItem = (itemId) => {
@@ -1389,6 +1525,165 @@
                     return item;
                 }));
             };
+
+            // ── Auto-sort ────────────────────────────────────────────────────────────
+
+            // Packing algorithm for non-container items. Returns [{id, position, shape, didRotate}].
+            //
+            // Containers are treated as immovable obstacles — their current shapes are stamped into
+            // occupancy and returned with their original positions unchanged.
+            //
+            // Non-containers are packed into the remaining space:
+            //   Phase 1 — Greedy initial placement, largest-first, trying all orientations
+            //             (up to 8: 4 rotations × horizontal flip).
+            //   Phase 2 — Iterative refinement: each non-container repeatedly tries to move to a
+            //             more top-left position in any orientation. Alternates large→small /
+            //             small→large each pass to avoid directional bias. Runs until converged.
+            //
+            // "Earlier" = lower row, then lower column. This naturally keeps items in lower
+            // encumbrance tiers without any explicit tier-restriction logic.
+            const runAutoSort = (itemsToSort, subRows, subCols) => {
+                const occupancy = new Set();
+                const records   = new Map(); // id -> { position, shape, didRotate }
+
+                const markCells = (shape, row, col) => {
+                    for (const cell of shape) {
+                        const comma = cell.indexOf(',');
+                        occupancy.add(`${parseInt(cell, 10) + row},${parseInt(cell.slice(comma + 1), 10) + col}`);
+                    }
+                };
+                const unmarkCells = (shape, row, col) => {
+                    for (const cell of shape) {
+                        const comma = cell.indexOf(',');
+                        occupancy.delete(`${parseInt(cell, 10) + row},${parseInt(cell.slice(comma + 1), 10) + col}`);
+                    }
+                };
+
+                const isContainer  = item => !!item.containerType;
+                const getCurrShape = item => normalizeShape(getScaledContainerShape(item));
+                // Non-containers always have a user-drawn static shape — all orientations are valid
+                const getOrientations = item => getAllOrientations(getCurrShape(item));
+
+                // Tier constants — encumbrance tier preference drives placement priority
+                const TIER_W   = 5 * SUB_DIVISIONS;
+                const numTiers = Math.ceil(subCols / TIER_W);
+                const tierOf   = col => Math.floor(col / TIER_W);
+
+                // Position A is "better" than B: lower tier wins outright; ties broken by row then col.
+                // This is why a tier-0 position at row 14 beats a tier-1 position at row 3.
+                const isBetter = (a, b) => {
+                    const ta = tierOf(a.col), tb = tierOf(b.col);
+                    return ta < tb || (ta === tb && (a.row < b.row || (a.row === b.row && a.col < b.col)));
+                };
+
+                // Step 1: stamp all containers as fixed obstacles; record them unchanged
+                for (const item of itemsToSort.filter(isContainer)) {
+                    const s = getCurrShape(item);
+                    records.set(item.id, { position: item.position, shape: s, didRotate: false });
+                    markCells(s, item.position.row, item.position.col);
+                }
+
+                // Try each encumbrance tier in order so items always land in the lowest possible tier.
+                // Falls back to an unrestricted scan for items wider than a single tier.
+                const findEarliest = (orientations) => {
+                    for (let t = 0; t < numTiers; t++) {
+                        const bStart = t * TIER_W, bEnd = Math.min(bStart + TIER_W, subCols);
+                        let best = null;
+                        for (const orient of orientations) {
+                            const pos = tryPlaceShape(orient, occupancy, subRows, subCols, false, bStart, bEnd);
+                            if (pos && (!best || pos.row < best.pos.row || (pos.row === best.pos.row && pos.col < best.pos.col)))
+                                best = { pos, shape: orient };
+                        }
+                        if (best) return best;
+                    }
+                    // Overflow: item is wider than one tier — best unrestricted position
+                    let best = null;
+                    for (const orient of orientations) {
+                        const pos = tryPlaceShape(orient, occupancy, subRows, subCols, false, null, null);
+                        if (pos && (!best || pos.row < best.pos.row || (pos.row === best.pos.row && pos.col < best.pos.col)))
+                            best = { pos, shape: orient };
+                    }
+                    return best;
+                };
+
+                // Step 2: initial greedy placement of non-containers, largest first
+                const sorted = itemsToSort
+                    .filter(i => !isContainer(i))
+                    .sort((a, b) => getCurrShape(b).length - getCurrShape(a).length);
+
+                for (const item of sorted) {
+                    const result = findEarliest(getOrientations(item));
+                    if (result) {
+                        markCells(result.shape, result.pos.row, result.pos.col);
+                        records.set(item.id, { position: result.pos, shape: result.shape, didRotate: true });
+                    } else {
+                        // No space found — keep original position as fallback
+                        const s = getCurrShape(item);
+                        records.set(item.id, { position: item.position, shape: s, didRotate: false });
+                        markCells(s, item.position.row, item.position.col);
+                    }
+                }
+
+                // Step 3: iterative refinement — repeatedly move items to better positions until stable.
+                // "Better" = lower tier first, then earlier row/col within same tier.
+                const MAX_ITER = 20;
+                for (let iter = 0; iter < MAX_ITER; iter++) {
+                    let anyImproved = false;
+                    const order = iter % 2 === 0 ? sorted.slice().reverse() : [...sorted];
+
+                    for (const item of order) {
+                        const rec = records.get(item.id);
+                        if (!rec) continue;
+                        unmarkCells(rec.shape, rec.position.row, rec.position.col);
+
+                        const result = findEarliest(getOrientations(item));
+                        if (result && isBetter(result.pos, rec.position)) {
+                            records.set(item.id, { position: result.pos, shape: result.shape, didRotate: true });
+                            markCells(result.shape, result.pos.row, result.pos.col);
+                            anyImproved = true;
+                        } else {
+                            markCells(rec.shape, rec.position.row, rec.position.col);
+                        }
+                    }
+                    if (!anyImproved) break; // Converged — no further improvement is possible
+                }
+
+                return [...records.entries()].map(([id, r]) => ({ id, position: r.position, shape: r.shape, didRotate: r.didRotate }));
+            };
+
+            const applyAutoSort = (results, prevItems) =>
+                prevItems.map(item => {
+                    const r = results.find(p => p.id === item.id);
+                    if (!r) return item;
+                    return { ...item, position: r.position, ...(r.didRotate ? { shape: r.shape } : {}) };
+                });
+
+            const handleAutoSort = async () => {
+                if (!window.confirm('Auto-sort the main grid? Non-container items will be repacked into available space. Containers stay in place.')) return;
+                setIsSorting(true);
+                await new Promise(r => setTimeout(r, 10));
+                const results = runAutoSort(placedItems, GRID_SUB_ROWS, GRID_SUB_COLS);
+                setPlacedItems(prev => applyAutoSort(results, prev));
+                setIsSorting(false);
+            };
+
+            const handleAutoSortInternal = async () => {
+                if (!openContainerId) return;
+                const container = placedItems.find(c => c.id === openContainerId);
+                if (!container || !container.internalGrid?.length) return;
+                if (!window.confirm(`Auto-sort the contents of ${container.name}?`)) return;
+                setIsSorting(true);
+                await new Promise(r => setTimeout(r, 10));
+                const { subRows, subCols } = getInternalDimensions(container);
+                const results = runAutoSort(container.internalGrid, subRows, subCols);
+                setPlacedItems(prev => prev.map(c =>
+                    c.id !== openContainerId ? c
+                    : { ...c, internalGrid: applyAutoSort(results, c.internalGrid) }
+                ));
+                setIsSorting(false);
+            };
+
+            // ─────────────────────────────────────────────────────────────────────
 
             const adjustContainerQuantity = (itemId, delta) => {
                 // Check if item is in internal grid
@@ -1825,9 +2120,14 @@
                 }
 
                 // Handle rotation for short drag distances (tap/click)
-                // Only rotate if distance is very small (< 5 pixels), item is not a container,
-                // and the item was already selected when the interaction began.
-                const shouldRotate = item && distance < 5 && !isItemContainer && itemWasSelectedRef.current;
+                // Non-containers always rotate on tap. Small containers (≤5×5 cells) also rotate on tap,
+                // except grid and coinpurse which use tap-to-open — those get a toolbar Rotate button instead.
+                const canTapRotate = item && (!isItemContainer || (
+                    isContainerRotatable(item) &&
+                    item.containerType !== 'grid' &&
+                    item.containerType !== 'coinpurse'
+                ));
+                const shouldRotate = item && distance < 5 && canTapRotate && itemWasSelectedRef.current;
 
                 // Tapping a selected container opens (or closes) its overlay
                 const shouldOpenContainer = item && distance < 5 && isItemContainer && itemWasSelectedRef.current
@@ -1854,28 +2154,7 @@
                 }
 
                 if (shouldRotate) {
-                  if (draggedFromInternalRef.current && openContainerId) {
-                    setPlacedItems(prev => prev.map(container => {
-                      if (container.id === openContainerId) {
-                        const bounds = getShapeBounds(item.shape);
-                        const rotatedShape = item.shape.map(cell => {
-                          const [r, c] = cell.split(',').map(Number);
-                          const relR = r - bounds.centerRow;
-                          const relC = c - bounds.centerCol;
-                          return `${Math.round(relC + bounds.centerRow)},${Math.round(-relR + bounds.centerCol)}`;
-                        });
-
-                        return {
-                          ...container,
-                          internalGrid: container.internalGrid.map(i => i.id === item.id ?
-                            { ...i, shape: rotatedShape } : i)
-                        };
-                      }
-                      return container;
-                    }));
-                  } else {
-                    rotateItem(item.id);
-                  }
+                  rotateItem(item.id);
 
                   // Clear drag state immediately after rotation
                   setDraggedItem(null);
@@ -2777,7 +3056,7 @@
                                 item:   activeItem,
                                 shape:  dragShape,
                                 bounds: dragBounds,
-                                initialTransform: `translate(${activationRect.left + (initCol + dragBounds.minCol) * subCellSize}px, ${activationRect.top + (initRow + dragBounds.minRow) * subCellSize}px)`,
+                                initialTransform: `translate(${Math.round(activationRect.left + (initCol + dragBounds.minCol) * subCellSize)}px, ${Math.round(activationRect.top + (initRow + dragBounds.minRow) * subCellSize)}px)`,
                             };
                             dragVisualRef.current   = visual;
                             activeDragIdRef.current = draggedItem;
@@ -2817,7 +3096,7 @@
                         if (dragOverlayRef.current && dragVisualRef.current && dragRect && pending) {
                             const { minRow, minCol } = dragVisualRef.current.bounds;
                             dragOverlayRef.current.style.transform =
-                                `translate(${dragRect.left + (pending.col + minCol) * subCellSize}px, ${dragRect.top + (pending.row + minRow) * subCellSize}px)`;
+                                `translate(${Math.round(dragRect.left + (pending.col + minCol) * subCellSize)}px, ${Math.round(dragRect.top + (pending.row + minRow) * subCellSize)}px)`;
                         }
 
                         pendingDragPos.current = pending;
@@ -3186,6 +3465,36 @@
                             setShowStartup(false);
                         } catch (error) {
                             alert('Error loading file — is this a valid Cubeventory save?');
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+                event.target.value = '';
+            };
+
+            const exportLibrary = () => {
+                const data = { libraryItems: items };
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'custom_library.json';
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            const importLibrary = (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const data = JSON.parse(e.target.result);
+                            const incoming = data.libraryItems || [];
+                            if (!incoming.length) { alert('No library items found in this file.'); return; }
+                            setItems(prev => mergeDefaultLibrary(prev, incoming));
+                        } catch {
+                            alert('Error reading file — is this a valid Cubeventory library or save file?');
                         }
                     };
                     reader.readAsText(file);
@@ -4082,7 +4391,14 @@
                                                 </svg>
                                             )}
                                         </button>
+                                        <button onClick={exportLibrary} className="flex items-center gap-1 bg-purple-500 text-white px-3 py-2 rounded text-sm hover:bg-purple-600">
+                                            <ArrowDownToLine size={16} /> Export Library
+                                        </button>
+                                        <button onClick={() => libraryFileInputRef.current?.click()} className="flex items-center gap-1 bg-purple-700 text-white px-3 py-2 rounded text-sm hover:bg-purple-800">
+                                            <Upload size={16} /> Import Library
+                                        </button>
                                         <input ref={fileInputRef} type="file" accept=".json" onChange={importData} className="hidden" />
+                                        <input ref={libraryFileInputRef} type="file" accept=".json" onChange={importLibrary} className="hidden" />
                                     </div>
                                     <label className="inline-flex items-center gap-1.5 text-sm text-gray-600 dark:text-white cursor-pointer select-none mt-1 w-fit">
                                         Selection Highlight Color:
@@ -4486,8 +4802,12 @@
                                         className="flex items-center justify-center gap-1 bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600">
                                         Recycle Bin <Trash2 size={12} />
                                     </button>
+                                    <button onClick={handleAutoSort} disabled={isSorting}
+                                        className={`flex items-center justify-center gap-1 px-3 py-1 rounded text-xs ${isSorting ? 'bg-indigo-300 text-white cursor-wait' : 'bg-indigo-500 text-white hover:bg-indigo-600'}`}>
+                                        {isSorting ? 'Sorting…' : 'Auto-Sort Grid'}
+                                    </button>
                                     <button onClick={() => setShowWeightlessItems(v => !v)}
-                                        className={`col-span-2 flex items-center justify-center gap-1 px-3 py-1 rounded text-xs ${showWeightlessItems ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'}`}>
+                                        className={`flex items-center justify-center gap-1 px-3 py-1 rounded text-xs ${showWeightlessItems ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'}`}>
                                         Weightless Items {weightlessItems.length > 0 && <span className={`rounded-full w-4 h-4 flex items-center justify-center font-bold text-xs ${showWeightlessItems ? 'bg-white text-purple-600' : 'bg-purple-600 text-white'}`}>{weightlessItems.reduce((s, e) => s + e.qty, 0)}</span>}
                                     </button>
                                 </div>
@@ -4512,18 +4832,28 @@
                                                     );
                                                 })}
                                                 
-                                                {stableItems.map(item => (
-                                                    <PlacedGridItem
-                                                        key={item.id}
-                                                        item={item}
-                                                        selected={selectedItemId === item.id}
-                                                        subCellSize={subCellSize}
-                                                        cellSize={cellSize}
-                                                        characterName={characterName}
-                                                        badgeLayout={badgeLayout}
-                                                        helpersRef={itemHelpersRef}
-                                                    />
-                                                ))}
+                                                {stableItems.map(item => {
+                                                    const _shape = getScaledContainerShape(item);
+                                                    const overlapKey = _shape.filter(cell => {
+                                                        const comma = cell.indexOf(',');
+                                                        const absRow = item.position.row + parseInt(cell, 10);
+                                                        const absCol = item.position.col + parseInt(cell.slice(comma + 1), 10);
+                                                        return (mainGridOccupancy[`${absRow},${absCol}`] || 0) > 1;
+                                                    }).join('|');
+                                                    return (
+                                                        <PlacedGridItem
+                                                            key={item.id}
+                                                            item={item}
+                                                            overlapKey={overlapKey}
+                                                            selected={selectedItemId === item.id}
+                                                            subCellSize={subCellSize}
+                                                            cellSize={cellSize}
+                                                            characterName={characterName}
+                                                            badgeLayout={badgeLayout}
+                                                            helpersRef={itemHelpersRef}
+                                                        />
+                                                    );
+                                                })}
                                             </>
                                 </div>
                             </div>
@@ -4664,6 +4994,13 @@
                                 <div className="text-gray-300 text-xs">{usedWeight.toFixed(2)} / {container.internalCapacity} lbs</div>
                               </div>
                               <button
+                                onClick={handleAutoSortInternal}
+                                disabled={isSorting}
+                                className={`text-xs px-2 py-0.5 rounded border leading-none ${isSorting ? 'text-gray-500 border-gray-600 cursor-wait' : 'text-gray-300 hover:text-white border-gray-500 hover:border-gray-300'}`}
+                                style={{ touchAction: 'auto' }}
+                                title="Auto-sort container contents"
+                              >{isSorting ? 'Sorting…' : 'Auto-Sort'}</button>
+                              <button
                                 onClick={() => { setOpenContainerId(null); }}
                                 className="text-gray-300 hover:text-white text-lg font-bold px-2 py-0.5 leading-none"
                                 style={{ touchAction: 'auto' }}
@@ -4721,7 +5058,7 @@
                             {(() => {
                               // Calculate occupancy for internal grid
                               const internalOccupancy = {};
-                              container.internalGrid.filter(item => item.id !== draggedItem).forEach((item) => {
+                              container.internalGrid.filter(item => item.id !== activeDragId).forEach((item) => {
                                 const shape = getScaledContainerShape(item);
                                 shape.forEach((cell) => {
                                   const [r, c] = cell.split(',').map(Number);
@@ -4732,7 +5069,7 @@
                                 });
                               });
 
-                              return container.internalGrid.filter(item => item.id !== draggedItem).map(item => {
+                              return container.internalGrid.filter(item => item.id !== activeDragId).map(item => {
                                 const shape = getScaledContainerShape(item);
                                 const bounds = getShapeBounds(shape);
                                 const selected = selectedItemId === item.id;
@@ -4893,23 +5230,26 @@
                                             const rect = gridRef.current?.getBoundingClientRect();
                                             if (!rect) return;
 
-                                            // Calculate initial grid position from cursor so ghost appears under finger
-                                            const initRow = Math.round((e.clientY - rect.top) / subCellSize);
-                                            const initCol = Math.round((e.clientX - rect.left) / subCellSize);
+                                            // Centroid offset: item center follows cursor
+                                            const slotShape  = getScaledContainerShape(occupiedItem);
+                                            const slotBounds = getShapeBounds(slotShape);
+                                            const cOffX = Math.round(((slotBounds.maxCol - slotBounds.minCol) / 2) * subCellSize);
+                                            const cOffY = Math.round(((slotBounds.maxRow - slotBounds.minRow) / 2) * subCellSize);
+                                            const initRow = Math.round((e.clientY - rect.top  - cOffY) / subCellSize);
+                                            const initCol = Math.round((e.clientX - rect.left - cOffX) / subCellSize);
 
                                             // Store item in ref — it stays in slot.occupied until drop is resolved
                                             draggedSlotItemRef.current = occupiedItem;
                                             draggedFromSlotRef.current = slotIndex;
                                             draggedFromInternalRef.current = false;
 
-                                            // Offset of zero means item top-left follows cursor
-                                            dragOffsetRef.current    = { x: 0, y: 0 };
+                                            dragOffsetRef.current    = { x: cOffX, y: cOffY };
                                             dragStartClientRef.current = { x: e.clientX, y: e.clientY };
                                             dragItemDataRef.current    = occupiedItem;
                                             // activeDragId / dragVisual deferred until DRAG_THRESHOLD crossed in handleMove
 
                                             setDraggedSlotPosition({ row: initRow, col: initCol });
-                                            setDragOffset({ x: 0, y: 0 });
+                                            setDragOffset({ x: cOffX, y: cOffY });
                                             setDraggedFromInternal(false);
                                             setDragStartPosition({ row: initRow, col: initCol });
                                             setDragStartClient({ x: e.clientX, y: e.clientY });
@@ -5202,17 +5542,31 @@
                             {selectedItem.containerType !== null && (
                               <>
                                 {selectedItem.containerType === 'grid' ? (
-                                  <button onClick={() => { setOpenContainerId(openContainerId === selectedItem.id ? null : selectedItem.id); setOpenCoinpurseId(null); setOverlayPosition(null); }} className="flex flex-col items-center gap-1 bg-purple-500 text-white px-4 py-3 rounded hover:bg-purple-600 flex-1">
-                                    <span className="text-xl">{openContainerId === selectedItem.id ? 'Close' : 'Open'}</span>
-                                  </button>
+                                  <>
+                                    <button onClick={() => { setOpenContainerId(openContainerId === selectedItem.id ? null : selectedItem.id); setOpenCoinpurseId(null); setOverlayPosition(null); }} className="flex flex-col items-center gap-1 bg-purple-500 text-white px-4 py-3 rounded hover:bg-purple-600 flex-1">
+                                      <span className="text-xl">{openContainerId === selectedItem.id ? 'Close' : 'Open'}</span>
+                                    </button>
+                                    {isContainerRotatable(selectedItem) && (
+                                      <button onClick={() => rotateItem(selectedItem.id)} className="flex flex-col items-center gap-1 bg-blue-500 text-white px-4 py-3 rounded hover:bg-blue-600 flex-1">
+                                        <RotateCw size={22} /><span className="text-xs">Rotate</span>
+                                      </button>
+                                    )}
+                                  </>
                                 ) : selectedItem.containerType === 'coinpurse' ? (
-                                  <button onClick={() => {
-                                    const inContainer = openContainerId && placedItems.find(c => c.id === openContainerId)?.internalGrid.find(i => i.id === selectedItem.id);
-                                    setOpenCoinpurseId(openCoinpurseId === selectedItem.id ? null : selectedItem.id);
-                                    if (!inContainer) { setOpenContainerId(null); setOverlayPosition(null); }
-                                  }} className="flex flex-col items-center gap-1 bg-amber-600 text-white px-4 py-3 rounded hover:bg-amber-700 flex-1">
-                                    <span className="text-xl">{openCoinpurseId === selectedItem.id ? 'Close' : 'Coins'}</span>
-                                  </button>
+                                  <>
+                                    <button onClick={() => {
+                                      const inContainer = openContainerId && placedItems.find(c => c.id === openContainerId)?.internalGrid.find(i => i.id === selectedItem.id);
+                                      setOpenCoinpurseId(openCoinpurseId === selectedItem.id ? null : selectedItem.id);
+                                      if (!inContainer) { setOpenContainerId(null); setOverlayPosition(null); }
+                                    }} className="flex flex-col items-center gap-1 bg-amber-600 text-white px-4 py-3 rounded hover:bg-amber-700 flex-1">
+                                      <span className="text-xl">{openCoinpurseId === selectedItem.id ? 'Close' : 'Coins'}</span>
+                                    </button>
+                                    {isContainerRotatable(selectedItem) && (
+                                      <button onClick={() => rotateItem(selectedItem.id)} className="flex flex-col items-center gap-1 bg-blue-500 text-white px-4 py-3 rounded hover:bg-blue-600 flex-1">
+                                        <RotateCw size={22} /><span className="text-xs">Rotate</span>
+                                      </button>
+                                    )}
+                                  </>
                                 ) : selectedItem.containerType === 'stacked' ? (() => {
                                   const _sb  = getShapeBounds(selectedItem.shape);
                                   const _bH  = _sb.maxRow - _sb.minRow + 1;
