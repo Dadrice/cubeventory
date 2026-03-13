@@ -3533,7 +3533,7 @@
             };
 
             const startFresh = () => {
-                setItems([]);
+                setItems(defaultLibraryRef.current);
                 setCharacters([{ id: DEFAULT_CHAR_ID, name: '', strength: 10, characterClass: [], placedItems: [], setAsideItems: [], weightlessItems: [], myAttunements: [] }]);
                 setActiveCharacterId(DEFAULT_CHAR_ID);
                 setCharacterName(''); setStrength(10); setCharacterClass([]);
@@ -4260,7 +4260,7 @@
                         </button>
                         <button onClick={startFresh}
                             className="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 text-sm">
-                            Start Fresh
+                            Create New Save File
                         </button>
                     </div>
                     <input ref={fileInputRef} type="file" accept=".json" onChange={importData} className="hidden" />
