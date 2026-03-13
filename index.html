@@ -274,7 +274,8 @@
                             // Rectangular fast path — one div instead of wSub×hSub divs.
                             <div className={item.magical ? 'magical-glow absolute pointer-events-auto cursor-pointer' : 'absolute pointer-events-auto cursor-pointer'}
                                 style={{ top: originT, left: originL, width: itemW, height: itemH,
-                                    backgroundColor: item.color, opacity: 0.8, zIndex: 1,
+                                    backgroundColor: item.color,
+                                    opacity: 0.8, zIndex: 1,
                                     touchAction: 'none', border: `1px solid ${darker}`, ...magicStyle }}
                                 onClick={(e) => { e.stopPropagation(); if (!h.discardTarget) h.setSelectedItemId(item.id); }}
                                 onPointerDown={(e) => { e.target.setPointerCapture(e.pointerId); h.handleItemDragStart(e, item); }}
@@ -286,14 +287,13 @@
                                 {shape.map((cell, idx) => {
                                     const comma = cell.indexOf(',');
                                     const r = parseInt(cell, 10), c = parseInt(cell.slice(comma + 1), 10);
-                                    const isOverlapping = (h.mainGridOccupancy[`${item.position.row + r},${item.position.col + c}`] || 0) > 1;
                                     return (
                                         <div key={idx} className="absolute pointer-events-auto cursor-pointer"
                                             style={{ width: subCellSize, height: subCellSize,
                                                 top:  (r - bounds.minRow) * subCellSize,
                                                 left: (c - bounds.minCol) * subCellSize,
-                                                backgroundColor: isOverlapping ? '#EF4444' : item.color,
-                                                opacity: isOverlapping ? 1 : 0.8, zIndex: 1,
+                                                backgroundColor: item.color,
+                                                opacity: 0.8, zIndex: 1,
                                                 touchAction: 'none',
                                                 ...getItemBorderStyle(shape, r, c, darker) }}
                                             onClick={(e) => { e.stopPropagation(); if (!h.discardTarget) h.setSelectedItemId(item.id); }}
@@ -648,7 +648,7 @@
             const [newItemMaxColumns, setNewItemMaxColumns] = useState('');   // max columns (width)
             const [newItemInternalCapacity, setNewItemInternalCapacity] = useState('');
             const [newItemExternalSlots, setNewItemExternalSlots] = useState(''); // number of attachment slots this item has when placed in the grid
-            const [newItemExternalSlotWeight, setNewItemExternalSlotWeight] = useState('');
+            const [newItemExternalSlotWeights, setNewItemExternalSlotWeights] = useState([]); // per-slot max weight array
             const [openContainerId, setOpenContainerId] = useState(null);
             const [openCoinpurseId, setOpenCoinpurseId] = useState(null);
             const [draggedFromInternal, setDraggedFromInternal] = useState(false); // Flag to track if drag started in internal grid
@@ -889,7 +889,6 @@
                   const baseW = parseFloat(newItemBaseWeight);
                   const capacity = parseFloat(newItemInternalCapacity);
                   const numSlots = parseInt(newItemExternalSlots) || 0;
-                  const slotWeight = parseFloat(newItemExternalSlotWeight) || 0;
 
                   if (!newItemName || isNaN(baseW) || isNaN(capacity) || baseW <= 0 || capacity <= 0) return;
 
@@ -898,7 +897,7 @@
                   internalCapacity = capacity;
 
                   for (let i = 0; i < numSlots; i++) {
-                    externalSlots.push({ id: i + 1, maxWeight: slotWeight, occupied: null });
+                    externalSlots.push({ id: i + 1, maxWeight: parseFloat(newItemExternalSlotWeights[i]) || 0, occupied: null });
                   }
 
                 } else if (containerType === 'quantity') {
@@ -1038,7 +1037,7 @@
                 setNewItemMaxColumns('');
                 setNewItemInternalCapacity('');
                 setNewItemExternalSlots('');
-                setNewItemExternalSlotWeight('');
+                setNewItemExternalSlotWeights([]);
                 setNewItemNotes('');
                 setNewItemMagical(false);
                 setNewItemMagicalColor('#a855f7');
@@ -1069,7 +1068,7 @@
                     setNewItemBaseWeight(String(item.emptyWeight));
                     setNewItemInternalCapacity(String(item.internalCapacity));
                     setNewItemExternalSlots(String(item.externalSlots?.length ?? 0));
-                    setNewItemExternalSlotWeight(String(item.externalSlots?.[0]?.maxWeight ?? 10));
+                    setNewItemExternalSlotWeights((item.externalSlots ?? []).map(s => String(s.maxWeight)));
                 } else if (item.containerType === 'quantity') {
                     setNewItemContainerSubtype('quantity');
                     setNewItemBaseWeight(String(item.emptyWeight));
@@ -3444,9 +3443,11 @@
                                 setActiveCharacterId(aid);
                                 setCharacterName(ac.name || '');
                                 setStrength(ac.strength || 10);
+                                setCharacterClass(normaliseClass(ac.characterClass));
                                 setPlacedItems(ac.placedItems || []);
                                 setSetAsideItems(ac.setAsideItems || []);
                                 setWeightlessItems(ac.weightlessItems || []);
+                                setMyAttunements(validAttunements(ac.myAttunements));
                             } else {
                                 // v1 format
                                 setItems(mergeDefaultLibrary(data.items || [], defaultLibraryRef.current));
@@ -4207,30 +4208,6 @@
             const creationSubCellSize = 40 * creationGridScale;
             const targetSubCells = calcTargetSubCells();
 
-            if (showStartup) return (
-                <div className="min-h-screen flex flex-col items-center justify-center gap-6 bg-gray-50 dark:bg-gray-900 p-8 text-center">
-                    <div>
-                        <h1 className="text-3xl font-bold mb-2">Cubeventory</h1>
-                        <p className="text-gray-500 dark:text-gray-400 text-sm">D&amp;D inventory manager</p>
-                    </div>
-                    <p className="text-gray-600 max-w-sm text-sm leading-relaxed">
-                        Keep your save file in a consistent, easy-to-find location —
-                        a dedicated folder on desktop, or your Google Drive / iCloud Drive root on mobile.
-                    </p>
-                    <div className="flex flex-col gap-3 w-full max-w-xs">
-                        <button onClick={() => fileInputRef.current?.click()}
-                            className="bg-blue-500 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-600 text-sm">
-                            Load Save File
-                        </button>
-                        <button onClick={startFresh}
-                            className="bg-gray-200 text-gray-700 dark:text-gray-300 px-6 py-3 rounded-lg font-semibold hover:bg-gray-300 text-sm">
-                            Start Fresh
-                        </button>
-                    </div>
-                    <input ref={fileInputRef} type="file" accept=".json" onChange={importData} className="hidden" />
-                </div>
-            );
-
             // Stable items = everything except whatever is currently being dragged.
             // Separating this memo means mainGridOccupancy only recomputes when items
             // are actually placed/removed, NOT on every drag-position frame update.
@@ -4265,6 +4242,30 @@
                 setSelectedItemId,
                 handleItemDragStart,
             };
+
+            if (showStartup) return (
+                <div className="min-h-screen flex flex-col items-center justify-center gap-6 bg-gray-50 dark:bg-gray-900 p-8 text-center">
+                    <div>
+                        <h1 className="text-3xl font-bold mb-2">Cubeventory</h1>
+                        <p className="text-gray-500 dark:text-gray-400 text-sm">D&amp;D inventory manager</p>
+                    </div>
+                    <p className="text-gray-600 max-w-sm text-sm leading-relaxed">
+                        Keep your save file in a consistent, easy-to-find location —
+                        a dedicated folder on desktop, or your Google Drive / iCloud Drive root on mobile.
+                    </p>
+                    <div className="flex flex-col gap-3 w-full max-w-xs">
+                        <button onClick={() => fileInputRef.current?.click()}
+                            className="bg-blue-500 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-600 text-sm">
+                            Load Save File
+                        </button>
+                        <button onClick={startFresh}
+                            className="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 text-sm">
+                            Start Fresh
+                        </button>
+                    </div>
+                    <input ref={fileInputRef} type="file" accept=".json" onChange={importData} className="hidden" />
+                </div>
+            );
 
             return (
                 <div className={`min-h-screen bg-gray-50 dark:bg-gray-900 dark:bg-gray-950 text-gray-900 dark:text-gray-100
@@ -4501,8 +4502,25 @@
                                   {newItemContainerSubtype === 'grid' ? (
                                     <div>
                                       <input value={newItemInternalCapacity} onChange={(e) => setNewItemInternalCapacity(e.target.value)} placeholder="Internal Capacity (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      <input value={newItemExternalSlots} onChange={(e) => setNewItemExternalSlots(e.target.value)} placeholder="Number of External Slots (max 4)" type="number" min="0" max="4" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      <input value={newItemExternalSlotWeight} onChange={(e) => setNewItemExternalSlotWeight(e.target.value)} placeholder="Max Weight per Slot (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                      <input value={newItemExternalSlots} onChange={(e) => {
+                                        const val = e.target.value;
+                                        setNewItemExternalSlots(val);
+                                        const n = Math.min(4, Math.max(0, parseInt(val) || 0));
+                                        setNewItemExternalSlotWeights(prev => {
+                                          const arr = [...prev];
+                                          while (arr.length < n) arr.push('');
+                                          return arr.slice(0, n);
+                                        });
+                                      }} placeholder="Number of External Slots (max 4)" type="number" min="0" max="4" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                      {Array.from({ length: parseInt(newItemExternalSlots) || 0 }, (_, i) => (
+                                        <input key={i}
+                                          value={newItemExternalSlotWeights[i] ?? ''}
+                                          onChange={(e) => setNewItemExternalSlotWeights(prev => {
+                                            const next = [...prev]; next[i] = e.target.value; return next;
+                                          })}
+                                          placeholder={`Slot ${i + 1} max weight (lbs)`}
+                                          type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                      ))}
                                     </div>
                                   ) : newItemContainerSubtype === 'quantity' ? (
                                     <div>
@@ -4822,15 +4840,28 @@
                                                     subCellSize={subCellSize}
                                                     subDivisions={SUB_DIVISIONS}
                                                 />
-                                                {Object.entries(mainGridOccupancy).filter(([, count]) => count > 1).map(([key]) => {
-                                                    const comma = key.indexOf(',');
-                                                    const r = parseInt(key, 10);
-                                                    const c = parseInt(key.slice(comma + 1), 10);
+                                                {(() => {
+                                                    const ce = Object.entries(mainGridOccupancy).filter(([, count]) => count > 1);
+                                                    if (!ce.length) return null;
+                                                    const S = subCellSize;
                                                     return (
-                                                        <div key={key} className="absolute bg-red-500 pointer-events-none"
-                                                            style={{ top: r * subCellSize, left: c * subCellSize, width: subCellSize, height: subCellSize, zIndex: 0 }} />
+                                                        <svg className="absolute pointer-events-none" style={{ top: 0, left: 0, width: GRID_SUB_COLS * S, height: GRID_SUB_ROWS * S, zIndex: 3 }}>
+                                                            <defs>
+                                                                <pattern id="col-stripe" width="8" height="8" patternUnits="userSpaceOnUse">
+                                                                    <rect width="8" height="8" fill="rgba(255,255,255,0.6)"/>
+                                                                    <line x1="0" y1="8" x2="8" y2="0" stroke="#EF4444" strokeWidth="4"/>
+                                                                    <line x1="-4" y1="4" x2="4" y2="-4" stroke="#EF4444" strokeWidth="4"/>
+                                                                    <line x1="4" y1="12" x2="12" y2="4" stroke="#EF4444" strokeWidth="4"/>
+                                                                </pattern>
+                                                            </defs>
+                                                            {ce.map(([key]) => {
+                                                                const comma = key.indexOf(',');
+                                                                const r = parseInt(key, 10), c = parseInt(key.slice(comma + 1), 10);
+                                                                return <rect key={key} x={c * S} y={r * S} width={S} height={S} fill="url(#col-stripe)"/>;
+                                                            })}
+                                                        </svg>
                                                     );
-                                                })}
+                                                })()}
                                                 
                                                 {stableItems.map(item => {
                                                     const _shape = getScaledContainerShape(item);
@@ -5069,7 +5100,7 @@
                                 });
                               });
 
-                              return container.internalGrid.filter(item => item.id !== activeDragId).map(item => {
+                              const renderedItems = container.internalGrid.filter(item => item.id !== activeDragId).map(item => {
                                 const shape = getScaledContainerShape(item);
                                 const bounds = getShapeBounds(shape);
                                 const selected = selectedItemId === item.id;
@@ -5115,8 +5146,6 @@
                                       const absRow = item.position.row + r;
                                       const absCol = item.position.col + c;
                                       const key = `${absRow},${absCol}`;
-                                      const isOverlapping = (internalOccupancy[key] || 0) > 1;
-
                                       return (
                                         <div
                                           key={idx}
@@ -5126,8 +5155,8 @@
                                             height: subCellSize,
                                             top: absRow * subCellSize,
                                             left: absCol * subCellSize,
-                                            backgroundColor: isOverlapping ? '#EF4444' : item.color,
-                                            opacity: isOverlapping ? 1 : 0.8,
+                                            backgroundColor: item.color,
+                                            opacity: 0.8,
                                             zIndex: 1,
                                             touchAction: 'none',
                                             ...getItemBorderStyle(shape, r, c, darkenColor(item.color)),
@@ -5179,6 +5208,28 @@
                                   </React.Fragment>
                                 );
                               });
+                              const overlay = (() => {
+                                const ce = Object.entries(internalOccupancy).filter(([, count]) => count > 1);
+                                if (!ce.length) return null;
+                                const S = subCellSize;
+                                return (
+                                  <svg key="int-col" className="absolute pointer-events-none" style={{ top: 0, left: 0, width: '100%', height: '100%', zIndex: 3 }}>
+                                    <defs>
+                                      <pattern id="int-col-stripe" width="8" height="8" patternUnits="userSpaceOnUse">
+                                        <rect width="8" height="8" fill="rgba(255,255,255,0.6)"/>
+                                        <line x1="0" y1="8" x2="8" y2="0" stroke="#EF4444" strokeWidth="4"/>
+                                        <line x1="-4" y1="4" x2="4" y2="-4" stroke="#EF4444" strokeWidth="4"/>
+                                        <line x1="4" y1="12" x2="12" y2="4" stroke="#EF4444" strokeWidth="4"/>
+                                      </pattern>
+                                    </defs>
+                                    {ce.map(([key]) => {
+                                      const [r, c] = key.split(',').map(Number);
+                                      return <rect key={key} x={c * S} y={r * S} width={S} height={S} fill="url(#int-col-stripe)"/>;
+                                    })}
+                                  </svg>
+                                );
+                              })();
+                              return <React.Fragment>{renderedItems}{overlay}</React.Fragment>;
                             })()}
                                 </div>
                             </div>

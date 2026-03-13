@@ -177,31 +177,6 @@
       ]
     },
     {
-      "id": 1772839210718,
-      "name": "Abacus",
-      "weight": 2,
-      "shape": [
-        "2,0",
-        "2,1",
-        "2,2",
-        "2,3",
-        "3,0",
-        "3,1",
-        "3,2",
-        "3,3"
-      ],
-      "type": "tool",
-      "color": "#FC8D4D",
-      "containerType": null,
-      "emptyWeight": 0,
-      "contentsWeight": 0,
-      "maxUnits": 0,
-      "currentUnits": null,
-      "currentWeight": 2,
-      "scaleDirection": null,
-      "internalCapacity": 0
-    },
-    {
       "id": 1772841020225,
       "name": "Vial",
       "weight": 0.5,
@@ -9654,6 +9629,31 @@
       "internalCapacity": 24,
       "internalGrid": [],
       "externalSlots": []
+    },
+    {
+      "id": 1772839210718,
+      "name": "Abacus",
+      "weight": 2,
+      "shape": [
+        "2,0",
+        "2,1",
+        "2,2",
+        "2,3",
+        "3,0",
+        "3,1",
+        "3,2",
+        "3,3"
+      ],
+      "type": "tool",
+      "color": "#FC8D4D",
+      "containerType": null,
+      "emptyWeight": 0,
+      "contentsWeight": 0,
+      "maxUnits": 0,
+      "currentUnits": null,
+      "currentWeight": 2,
+      "scaleDirection": null,
+      "internalCapacity": 0
     }
   ]
 }
