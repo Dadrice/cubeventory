@@ -4414,273 +4414,6 @@
                             )}
                         </div>
 
-                        {(!libraryCollapsed || isCreatingItem) && <div className="bg-white dark:bg-gray-800 p-3 rounded-lg shadow mb-3">
-                          {!isCreatingItem ? (
-                            <button onClick={() => { setIsCreatingItem(true); setSelectedItemId(null); }} className="flex items-center gap-1 text-purple-600 text-sm font-medium hover:text-purple-800">
-                              <Plus size={14} /> New Item
-                            </button>
-                          ) : (
-                            <>
-                              <div className="flex items-center justify-between mb-2">
-                                <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300">{editingItemId ? 'Edit Item' : 'Create New Item'}</h2>
-                                <button onClick={() => { setIsCreatingItem(false); resetItemCreation(); }} className="text-gray-400 hover:text-gray-600 text-xs">✕ Cancel</button>
-                              </div>
-                              <select value={newItemType} onChange={(e) => {
-                                setNewItemType(e.target.value);
-                                // Reset container-specific states when switching types to prevent stale data
-                                if (e.target.value !== 'container') {
-                                  setNewItemContainerSubtype('quantity');
-                                  setNewItemBaseWeight('');
-                                  setNewItemFilledWeight('');
-                                  setNewItemMaxUnits('');
-                                  setNewItemInternalCapacity('');
-                                  setNewItemExternalSlots('');
-                                  setNewItemExternalSlotWeight('');
-                                }
-                              }} className="
-                                      w-full mb-2 dark:text-gray-400 p-2 border rounded
-                                      bg-white
-                                      text-gray-400
-                                      border-gray-300 dark:border-gray-600
-                                      focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400
-                                    "
-                                  > 
-                                {Object.keys(ITEM_TYPES).map(type => (
-                                  <option key={type} value={type}>{ITEM_TYPES[type].name}</option>
-                                ))}
-                              </select>
-                              <input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="Item Name" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                              <textarea value={newItemNotes} onChange={(e) => setNewItemNotes(e.target.value)} placeholder="Notes (optional)" rows={2} className="w-full mb-2 dark:text-gray-400 p-2 border rounded text-sm resize-none" />
-                              <div className="flex items-center gap-2 mb-2">
-                                <input type="checkbox" checked={newItemMagical} onChange={(e) => setNewItemMagical(e.target.checked)} className="w-4 h-4 accent-purple-500 flex-shrink-0" />
-                                <span className="text-sm text-purple-600 font-medium">✦ Magical item</span>
-                                {newItemMagical && (
-                                  <input type="color" value={newItemMagicalColor} onChange={(e) => setNewItemMagicalColor(e.target.value)} title="Glow color" className="w-8 h-8 rounded cursor-pointer border border-gray-300 dark:border-gray-600 p-0.5 flex-shrink-0" />
-                                )}
-                              </div>
-                              {newItemMagical && (
-                                <div className="mb-2">
-                                  <label className="flex items-center gap-2 cursor-pointer select-none mb-1">
-                                    <input type="checkbox" checked={newItemRequiresAttunement} onChange={(e) => { setNewItemRequiresAttunement(e.target.checked); if (!e.target.checked) setNewItemAttunementClasses([]); }} className="w-4 h-4 accent-amber-500" />
-                                    <span className="text-sm text-amber-600 font-medium flex items-center gap-1"><AttuneIcon size={14} /> Requires Attunement</span>
-                                  </label>
-                                  {newItemRequiresAttunement && (
-                                    <div>
-                                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Class restriction (leave empty for any class):</p>
-                                      <div className="flex flex-wrap gap-1">
-                                        {CLASSES.map(cls => (
-                                          <button key={cls} type="button"
-                                            onClick={() => setNewItemAttunementClasses(prev => prev.includes(cls) ? prev.filter(c => c !== cls) : [...prev, cls])}
-                                            className={`px-2 py-0.5 rounded text-xs border ${newItemAttunementClasses.includes(cls) ? 'bg-amber-400 text-white border-amber-400' : 'bg-white text-gray-600 border-gray-300 dark:border-gray-600'}`}>
-                                            {cls}
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                              {newItemType === 'potion' && (
-                                <input type="color" value={newItemColor} onChange={(e) => setNewItemColor(e.target.value)} className="w-full mb-2 p-1 border rounded" />
-                              )}
-                              {newItemType === 'container' ? (
-                                <div>
-                                  <select value={newItemContainerSubtype} onChange={(e) => setNewItemContainerSubtype(e.target.value)} className="
-                                      w-full mb-2 dark:text-gray-400 p-2 border rounded
-                                      bg-white
-                                      text-gray-400
-                                      border-gray-300 dark:border-gray-600
-                                      focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400
-                                    "
-                                  >
-                                    <option value="quantity">Quantity Container (quiver, waterskin, etc.)</option>
-                                    <option value="grid">Grid Container (backpack, chest, etc.)</option>
-                                    <option value="coinpurse">Coin Purse</option>
-                                    <option value="stacked">Stacked Bundle (rations, torches, etc.)</option>
-                                  </select>
-                                  <input value={newItemBaseWeight} onChange={(e) => setNewItemBaseWeight(e.target.value)} placeholder="Empty Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                  {newItemContainerSubtype === 'grid' ? (
-                                    <div>
-                                      <input value={newItemInternalCapacity} onChange={(e) => setNewItemInternalCapacity(e.target.value)} placeholder="Internal Capacity (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      <input value={newItemExternalSlots} onChange={(e) => {
-                                        const val = e.target.value;
-                                        setNewItemExternalSlots(val);
-                                        const n = Math.min(4, Math.max(0, parseInt(val) || 0));
-                                        setNewItemExternalSlotWeights(prev => {
-                                          const arr = [...prev];
-                                          while (arr.length < n) arr.push('');
-                                          return arr.slice(0, n);
-                                        });
-                                      }} placeholder="Number of External Slots (max 4)" type="number" min="0" max="4" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      {Array.from({ length: parseInt(newItemExternalSlots) || 0 }, (_, i) => (
-                                        <input key={i}
-                                          value={newItemExternalSlotWeights[i] ?? ''}
-                                          onChange={(e) => setNewItemExternalSlotWeights(prev => {
-                                            const next = [...prev]; next[i] = e.target.value; return next;
-                                          })}
-                                          placeholder={`Slot ${i + 1} max weight (lbs)`}
-                                          type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      ))}
-                                    </div>
-                                  ) : newItemContainerSubtype === 'quantity' ? (
-                                    <div>
-                                      <div className="flex gap-2 mb-2">
-                                        <button onClick={() => setNewItemFillMode('auto-drain')}
-                                          className={`flex-1 py-1.5 rounded border text-sm ${newItemFillMode === 'auto-drain' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 text-gray-600'}`}>
-                                          Paint Filled Shape
-                                        </button>
-                                        <button onClick={() => setNewItemFillMode('auto-fill')}
-                                          className={`flex-1 py-1.5 rounded border text-sm ${newItemFillMode === 'auto-fill' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 text-gray-600'}`}>
-                                          Auto-Scale from Empty
-                                        </button>
-                                      </div>
-                                      {newItemFillMode === 'auto-fill' ? (
-                                        <>
-                                          <input value={newItemMaxFillWeight} onChange={(e) => setNewItemMaxFillWeight(e.target.value)} placeholder="Max Fill Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                          <input value={newItemIncrementWeight} onChange={(e) => setNewItemIncrementWeight(e.target.value)} placeholder="Weight per unit (lbs, e.g. 8 for 1 gallon)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                          <input value={newItemContentLabel} onChange={(e) => setNewItemContentLabel(e.target.value)} placeholder="Unit label (e.g. gallons, apples)" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                          <p className="text-xs text-gray-400 italic mb-2">Max units = floor(max fill ÷ unit weight). Shape auto-generates — no drawing needed.</p>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <input value={newItemFilledWeight} onChange={(e) => setNewItemFilledWeight(e.target.value)} placeholder="Filled Contents Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                          <input value={newItemMaxUnits} onChange={(e) => setNewItemMaxUnits(e.target.value)} placeholder="Max Units" type="number" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                          <select value={newItemScaleDirection} onChange={(e) => setNewItemScaleDirection(e.target.value)} className="w-full mb-2 dark:text-gray-400 p-2 border rounded bg-white text-gray-400 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                            <option value="vertical">Scale Vertical</option>
-                                            <option value="horizontal">Scale Horizontal</option>
-                                          </select>
-                                        </>
-                                      )}
-                                    </div>
-                                  ) : newItemContainerSubtype === 'stacked' ? (
-                                    <div>
-                                      <input value={newItemItemWeight} onChange={(e) => setNewItemItemWeight(e.target.value)}
-                                        placeholder="Weight per item (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      <input value={newItemCapacityPerUnit} onChange={(e) => setNewItemCapacityPerUnit(e.target.value)}
-                                        placeholder="Items per unit/box" type="number" min="1" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      <select value={newItemScaleDirection} onChange={(e) => setNewItemScaleDirection(e.target.value)} className="
-                                      w-full mb-2 dark:text-gray-400 p-2 border rounded
-                                      bg-white
-                                      text-gray-400
-                                      border-gray-300 dark:border-gray-600
-                                      focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400
-                                    "
-                                  >
-                                        <option value="horizontal">Fill Horizontal (grows right, then down)</option>
-                                        <option value="vertical">Fill Vertical (grows down, then right)</option>
-                                      </select>
-                                    </div>
-                                  ) : (
-                                    <div>
-                                      <input value={newItemColumnCap} onChange={(e) => setNewItemColumnCap(e.target.value)} placeholder="Lbs of coins per column (default 5)" type="number" step="0.25" min="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                      <input value={newItemMaxColumns} onChange={(e) => setNewItemMaxColumns(e.target.value)} placeholder="Max columns / pouches (default 5)" type="number" min="1" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                                    </div>
-                                  ) /* coinpurse */}
-                                </div>
-                              ) : (
-                                <input value={newItemWeight} onChange={(e) => setNewItemWeight(e.target.value)} placeholder="Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
-                              )}
-                                {(() => {
-                                  const _autoFillContainer = newItemType === 'container' && (
-                                    newItemContainerSubtype === 'grid' ||
-                                    newItemContainerSubtype === 'stacked' ||
-                                    (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill')
-                                  );
-                                  const _weightless = parseFloat(newItemWeight) === 0 && newItemType !== 'container';
-                                  if (_weightless) return <p className="text-xs text-gray-400 italic mb-2">0-weight items don't need a shape — they go straight to the Weightless Items list.</p>;
-                                  if (_autoFillContainer) return <p className="text-xs text-gray-400 italic mb-2">Shape auto-generates from empty weight — no drawing required.</p>;
-                                  return null;
-                                })()}
-                                {(newItemType !== 'container' ? parseFloat(newItemWeight) !== 0 : !(
-                                    newItemContainerSubtype === 'grid' ||
-                                    newItemContainerSubtype === 'stacked' ||
-                                    (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill')
-                                )) ? (
-                                <>
-                                  <div className="mb-2">
-                                    <label className="block text-sm font-medium mb-1">Creation Grid Scale: {(creationGridScale * 100).toFixed(0)}%</label>
-                                    <input type="range" min="0.3" max="1" step="0.05" value={creationGridScale} onChange={(e) => setCreationGridScale(parseFloat(e.target.value))} className="w-full" />
-                                </div>
-                                <p className="text-sm mb-2">Tap sub-cells to paint shape ({newItemShape.length}/{targetSubCells})</p>
-                                <div ref={creationGridRef} className="mb-2 inline-block" style={{ touchAction: 'none' }}>
-                                    {[...Array(creationGridHeight)].map((_, row) => (
-                                        <div key={row} className="flex">
-                                            {[...Array(creationGridWidth)].map((_, col) => {
-                                                const cellKey = `${row},${col}`;
-                                                const isSelected = newItemShape.includes(cellKey);
-
-                                                // Determine which "full cell" this sub-cell belongs to (for checkerboard)
-                                                const fullCellRow = Math.floor(row / SUB_DIVISIONS);
-                                                const fullCellCol = Math.floor(col / SUB_DIVISIONS);
-                                                const isCheckerboardGray = (fullCellRow + fullCellCol) % 2 === 1;
-
-                                                // Determine if this sub-cell is on a full cell boundary
-                                                const isTopBoundary = row % SUB_DIVISIONS === 0;
-                                                const isLeftBoundary = col % SUB_DIVISIONS === 0;
-
-                                                return (
-                                                    <div
-                                                        key={col}
-                                                        data-row={row}
-                                                        data-col={col}
-                                                        onPointerDown={(e) => {
-                                                            e.preventDefault();
-                                                            e.currentTarget.setPointerCapture(e.pointerId);
-
-                                                            if (creationGridCellMode) {
-                                                                // Cell mode - paint entire cell block
-                                                                const fullCellRow = Math.floor(row / SUB_DIVISIONS);
-                                                                const fullCellCol = Math.floor(col / SUB_DIVISIONS);
-                                                                const subCells = [];
-                                                                for (let sr = 0; sr < SUB_DIVISIONS; sr++) {
-                                                                    for (let sc = 0; sc < SUB_DIVISIONS; sc++) {
-                                                                        subCells.push(`${fullCellRow * SUB_DIVISIONS + sr},${fullCellCol * SUB_DIVISIONS + sc}`);
-                                                                    }
-                                                                }
-                                                                const wasSelected = subCells.some(cell => newItemShape.includes(cell));
-                                                                modifyShapeCellBlock(fullCellRow, fullCellCol, wasSelected ? 'remove' : 'add');
-                                                                setPaintMode(wasSelected ? 'remove' : 'add');
-                                                                lastPaintedRef.current = { row: fullCellRow, col: fullCellCol };
-                                                            } else {
-                                                                // Sub-cell mode - paint individual sub-cell
-                                                                const cellKey = `${row},${col}`;
-                                                                const wasSelected = newItemShape.includes(cellKey);
-                                                                modifyShapeCell(row, col, wasSelected ? 'remove' : 'add');
-                                                                setPaintMode(wasSelected ? 'remove' : 'add');
-                                                                lastPaintedRef.current = { row, col };
-                                                            }
-                                                            setIsPainting(true);
-                                                        }}
-                                                        className={`cursor-pointer ${isSelected ? 'bg-purple-500' : (isCheckerboardGray ? 'bg-gray-100 dark:bg-gray-800' : 'bg-white')}`}
-                                                        style={{
-                                                            width: creationSubCellSize,
-                                                            height: creationSubCellSize,
-                                                            borderTop: isTopBoundary ? '2px solid #9CA3AF' : (creationGridCellMode ? 'none' : '1px solid #D1D5DB'),
-                                                            borderLeft: isLeftBoundary ? '2px solid #9CA3AF' : (creationGridCellMode ? 'none' : '1px solid #D1D5DB'),
-                                                            borderRight: col === creationGridWidth - 1 ? '2px solid #9CA3AF' : 'none',
-                                                            borderBottom: row === creationGridHeight - 1 ? '2px solid #9CA3AF' : 'none',
-                                                        }}
-                                                    />
-                                                );
-                                            })}
-                                        </div>
-                                    ))}
-                                </div>
-                                </>) : null}
-                                <div className="flex gap-2">
-                                    <button onClick={() => editingItemId ? setConfirmLibraryEdit(true) : saveNewItem()} disabled={(() => {
-                                        if (!newItemName) return true;
-                                        const _autoFill = newItemType === 'container' && (newItemContainerSubtype === 'grid' || newItemContainerSubtype === 'stacked' || (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill'));
-                                        const _weightless = parseFloat(newItemWeight) === 0 && newItemType !== 'container';
-                                        if (_autoFill || _weightless) return false;
-                                        return newItemShape.length !== targetSubCells;
-                                    })()} className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-300">{editingItemId ? 'Save Changes' : 'Save Item'}</button>
-                                    <button onClick={() => { setIsCreatingItem(false); resetItemCreation(); }} className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Cancel</button>
-                                </div>
-                            </>
-                          )}
-                        </div>}
-
                         <div className="bg-white dark:bg-gray-800 p-3 rounded-lg shadow mb-3">
                             <div className="flex items-center justify-between cursor-pointer select-none" onClick={() => setLibraryCollapsed(c => !c)}>
                                 <h2 className="text-lg font-bold">Item Library {items.length > 0 && <span className="text-sm font-normal text-gray-400">({items.length})</span>}</h2>
@@ -4689,102 +4422,372 @@
 
                             {!libraryCollapsed && (
                               <>
-                                {items.length === 0 ? (
-                                    <p className="text-gray-500 dark:text-gray-400 text-sm mt-2">No items yet. Use the New Item button above to create one!</p>
-                                ) : (
+                                <div className="flex border-b mt-2 mb-3">
+                                    <button onClick={() => { setIsCreatingItem(false); if (isCreatingItem) resetItemCreation(); }}
+                                        className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px ${!isCreatingItem ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}>
+                                        Item Library
+                                    </button>
+                                    <button onClick={() => setIsCreatingItem(true)}
+                                        className={`px-3 py-1.5 text-sm font-medium border-b-2 -mb-px ${isCreatingItem ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}>
+                                        Item Creation
+                                    </button>
+                                </div>
+                                {!isCreatingItem ? (
                                   <>
-                                    {/* Search */}
-                                    <input
-                                        type="text"
-                                        value={librarySearch}
-                                        onChange={e => setLibrarySearch(e.target.value)}
-                                        placeholder="Search items…"
-                                        className="w-full border rounded px-2 py-1 text-sm text-gray-500 dark:text-gray-400 mt-2"
-                                    />
+                                    {items.length === 0 ? (
+                                        <p className="text-gray-500 dark:text-gray-400 text-sm mt-2">No items yet. Switch to the Item Creation tab to create one!</p>
+                                    ) : (
+                                      <>
+                                        {/* Search */}
+                                        <input
+                                            type="text"
+                                            value={librarySearch}
+                                            onChange={e => setLibrarySearch(e.target.value)}
+                                            placeholder="Search items…"
+                                            className="w-full border rounded px-2 py-1 text-sm text-gray-500 dark:text-gray-400 mt-2"
+                                        />
 
-                                    {/* Category filter */}
-                                    <div className="flex gap-1 mt-2 flex-wrap">
-                                        {['all', 'armor', 'melee weapon', 'ranged weapon', 'firearm', 'ammunition', 'explosive', 'supply', 'tool', 'foci', 'clothing', 'container', 'potion'].map(cat => (
-                                            <button
-                                                key={cat}
-                                                onClick={() => setLibraryCategoryFilter(cat)}
-                                                className={`px-2 py-0.5 rounded text-xs border ${libraryCategoryFilter === cat ? 'bg-gray-700 dark:bg-gray-800 text-white border-white' : 'bg-white text-gray-600 dark:text-white border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:bg-gray-800'}`}
-                                            >
-                                                {cat === 'all' ? 'All' : ITEM_TYPES[cat]?.name ?? cat}
-                                            </button>
-                                        ))}
-                                    </div>
-
-                                    {/* Sort toggle */}
-                                    <div className="flex gap-1 mt-2">
-                                        {[
-                                            { keys: ['name-asc', 'name-desc'], labels: ['Name ↑', 'Name ↓'], base: 'name-asc' },
-                                            { keys: ['weight-asc', 'weight-desc'], labels: ['Weight ↑', 'Weight ↓'], base: 'weight-asc' },
-                                        ].map(opt => {
-                                            const isActive = opt.keys.includes(librarySortKey);
-                                            const currentIndex = opt.keys.indexOf(librarySortKey);
-                                            const label = isActive ? opt.labels[currentIndex] : opt.labels[0];
-                                            const nextKey = isActive ? opt.keys[(currentIndex + 1) % 2] : opt.base;
-                                            return (
+                                        {/* Category filter */}
+                                        <div className="flex gap-1 mt-2 flex-wrap">
+                                            {['all', 'armor', 'melee weapon', 'ranged weapon', 'firearm', 'ammunition', 'explosive', 'supply', 'tool', 'foci', 'clothing', 'container', 'potion'].map(cat => (
                                                 <button
-                                                    key={opt.base}
-                                                    onClick={() => setLibrarySortKey(nextKey)}
-                                                    className={`px-2 py-0.5 rounded text-xs border flex-1 ${isActive ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-600 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:bg-gray-800'}`}
+                                                    key={cat}
+                                                    onClick={() => setLibraryCategoryFilter(cat)}
+                                                    className={`px-2 py-0.5 rounded text-xs border ${libraryCategoryFilter === cat ? 'bg-gray-700 dark:bg-gray-800 text-white border-white' : 'bg-white text-gray-600 dark:text-white border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:bg-gray-800'}`}
                                                 >
-                                                    {label}
+                                                    {cat === 'all' ? 'All' : ITEM_TYPES[cat]?.name ?? cat}
                                                 </button>
-                                            );
-                                        })}
-                                    </div>
+                                            ))}
+                                        </div>
 
-                                    {/* Filtered + sorted list */}
-                                    {(() => {
-                                        const search = librarySearch.trim().toLowerCase();
-                                        let filtered = items.filter(item => {
-                                            const matchesSearch = !search || item.name.toLowerCase().includes(search);
-                                            const matchesCategory = libraryCategoryFilter === 'all' || item.type === libraryCategoryFilter;
-                                            return matchesSearch && matchesCategory;
-                                        });
-                                        filtered = [...filtered].sort((a, b) => {
-                                            if (librarySortKey === 'name-asc') return a.name.localeCompare(b.name);
-                                            if (librarySortKey === 'name-desc') return b.name.localeCompare(a.name);
-                                            if (librarySortKey === 'weight-asc') return a.weight - b.weight;
-                                            if (librarySortKey === 'weight-desc') return b.weight - a.weight;
-                                            return 0;
-                                        });
-                                        if (filtered.length === 0) return (
-                                            <p className="text-gray-400 text-sm mt-3 text-center">No items match.</p>
-                                        );
-                                        return (
-                                          <>
-                                            <div className="flex items-center justify-between mt-2 text-xs text-gray-500 dark:text-gray-400">
-                                                <span>{filtered.length} item{filtered.length !== 1 ? 's' : ''}</span>
-                                                <label className="flex items-center gap-1 cursor-pointer select-none">
-                                                    Show
-                                                    <select value={libraryMaxRows} onChange={e => setLibraryMaxRows(Number(e.target.value))} className="border rounded px-1 py-0.5 text-xs mx-1">
-                                                        {[5, 10, 15, 20, 30].map(n => <option key={n} value={n}>{n}</option>)}
-                                                    </select>
-                                                    rows
-                                                </label>
-                                            </div>
-                                            <div className="mt-1 flex flex-col gap-1 overflow-y-auto" style={{ maxHeight: `${libraryMaxRows * 50}px` }}>
-                                                {filtered.map(item => (
-                                                    <div key={item.id} className="flex items-center gap-2 border rounded px-2 py-1.5">
-                                                        <div className="flex-shrink-0 w-3 h-3 rounded-sm" style={{ backgroundColor: item.color }} />
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="font-medium text-sm truncate">{item.magical && <span className="text-purple-500 mr-1">✦</span>}{item.name}</div>
-                                                            <div className="text-xs text-gray-400">{ITEM_TYPES[item.type]?.name ?? item.type} · {item.weight} lbs</div>
-                                                        </div>
-                                                        <button onClick={() => addItemToGrid(item)} className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600 flex-shrink-0">Add</button>
+                                        {/* Sort toggle */}
+                                        <div className="flex gap-1 mt-2">
+                                            {[
+                                                { keys: ['name-asc', 'name-desc'], labels: ['Name ↑', 'Name ↓'], base: 'name-asc' },
+                                                { keys: ['weight-asc', 'weight-desc'], labels: ['Weight ↑', 'Weight ↓'], base: 'weight-asc' },
+                                            ].map(opt => {
+                                                const isActive = opt.keys.includes(librarySortKey);
+                                                const currentIndex = opt.keys.indexOf(librarySortKey);
+                                                const label = isActive ? opt.labels[currentIndex] : opt.labels[0];
+                                                const nextKey = isActive ? opt.keys[(currentIndex + 1) % 2] : opt.base;
+                                                return (
+                                                    <button
+                                                        key={opt.base}
+                                                        onClick={() => setLibrarySortKey(nextKey)}
+                                                        className={`px-2 py-0.5 rounded text-xs border flex-1 ${isActive ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-600 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:bg-gray-800'}`}
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+
+                                        {/* Filtered + sorted list */}
+                                        {(() => {
+                                            const search = librarySearch.trim().toLowerCase();
+                                            let filtered = items.filter(item => {
+                                                const matchesSearch = !search || item.name.toLowerCase().includes(search);
+                                                const matchesCategory = libraryCategoryFilter === 'all' || item.type === libraryCategoryFilter;
+                                                return matchesSearch && matchesCategory;
+                                            });
+                                            filtered = [...filtered].sort((a, b) => {
+                                                if (librarySortKey === 'name-asc') return a.name.localeCompare(b.name);
+                                                if (librarySortKey === 'name-desc') return b.name.localeCompare(a.name);
+                                                if (librarySortKey === 'weight-asc') return a.weight - b.weight;
+                                                if (librarySortKey === 'weight-desc') return b.weight - a.weight;
+                                                return 0;
+                                            });
+                                            if (filtered.length === 0) return (
+                                                <p className="text-gray-400 text-sm mt-3 text-center">No items match.</p>
+                                            );
+                                            return (
+                                              <>
+                                                <div className="flex items-center justify-between mt-2 text-xs text-gray-500 dark:text-gray-400">
+                                                    <span>{filtered.length} item{filtered.length !== 1 ? 's' : ''}</span>
+                                                    <label className="flex items-center gap-1 cursor-pointer select-none">
+                                                        Show
+                                                        <select value={libraryMaxRows} onChange={e => setLibraryMaxRows(Number(e.target.value))} className="border rounded px-1 py-0.5 text-xs mx-1">
+                                                            {[5, 10, 15, 20, 30].map(n => <option key={n} value={n}>{n}</option>)}
+                                                        </select>
+                                                        rows
+                                                    </label>
+                                                </div>
+                                                <div className="mt-1 flex flex-col gap-1 overflow-y-auto" style={{ maxHeight: `${libraryMaxRows * 50}px` }}>
+                                                    {filtered.map(item => (
+                                                        <div key={item.id} className="flex items-center gap-2 border rounded px-2 py-1.5">
+                                                            <div className="flex-shrink-0 w-3 h-3 rounded-sm" style={{ backgroundColor: item.color }} />
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="font-medium text-sm truncate">{item.magical && <span className="text-purple-500 mr-1">✦</span>}{item.name}</div>
+                                                                <div className="text-xs text-gray-400">{ITEM_TYPES[item.type]?.name ?? item.type} · {item.weight} lbs</div>
+                                                            </div>
+                                                            <button onClick={() => addItemToGrid(item)} className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600 flex-shrink-0">Add</button>
                                         <button onClick={() => addLibraryItemToQueue(item)} className="bg-teal-500 text-white px-2 py-1 rounded text-xs hover:bg-teal-600 flex-shrink-0">Send</button>
                                         <button onClick={() => startEditItem(item)} className="bg-orange-400 text-white px-2 py-1 rounded text-xs hover:bg-orange-500 flex-shrink-0">Edit</button>
                                         <button onClick={() => setLibDeleteId(item.id)} className="bg-red-400 text-white px-2 py-1 rounded text-xs hover:bg-red-500 flex-shrink-0">Delete</button>
-                                                    </div>
-                                                ))}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                              </>
+                                            );
+                                        })()}
+                                      </>
+                                    )}
+                                  </>
+                                ) : (
+                                  <>
+                                    {editingItemId && <p className="text-xs text-orange-500 font-medium mb-2">Editing: {newItemName}</p>}
+                                    <select value={newItemType} onChange={(e) => {
+                                      setNewItemType(e.target.value);
+                                      // Reset container-specific states when switching types to prevent stale data
+                                      if (e.target.value !== 'container') {
+                                        setNewItemContainerSubtype('quantity');
+                                        setNewItemBaseWeight('');
+                                        setNewItemFilledWeight('');
+                                        setNewItemMaxUnits('');
+                                        setNewItemInternalCapacity('');
+                                        setNewItemExternalSlots('');
+                                        setNewItemExternalSlotWeight('');
+                                      }
+                                    }} className="
+                                            w-full mb-2 dark:text-gray-400 p-2 border rounded
+                                            bg-white
+                                            text-gray-400
+                                            border-gray-300 dark:border-gray-600
+                                            focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400
+                                          "
+                                        >
+                                      {Object.keys(ITEM_TYPES).map(type => (
+                                        <option key={type} value={type}>{ITEM_TYPES[type].name}</option>
+                                      ))}
+                                    </select>
+                                    <input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="Item Name" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                    <textarea value={newItemNotes} onChange={(e) => setNewItemNotes(e.target.value)} placeholder="Notes (optional)" rows={2} className="w-full mb-2 dark:text-gray-400 p-2 border rounded text-sm resize-none" />
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <input type="checkbox" checked={newItemMagical} onChange={(e) => setNewItemMagical(e.target.checked)} className="w-4 h-4 accent-purple-500 flex-shrink-0" />
+                                      <span className="text-sm text-purple-600 font-medium">✦ Magical item</span>
+                                      {newItemMagical && (
+                                        <input type="color" value={newItemMagicalColor} onChange={(e) => setNewItemMagicalColor(e.target.value)} title="Glow color" className="w-8 h-8 rounded cursor-pointer border border-gray-300 dark:border-gray-600 p-0.5 flex-shrink-0" />
+                                      )}
+                                    </div>
+                                    {newItemMagical && (
+                                      <div className="mb-2">
+                                        <label className="flex items-center gap-2 cursor-pointer select-none mb-1">
+                                          <input type="checkbox" checked={newItemRequiresAttunement} onChange={(e) => { setNewItemRequiresAttunement(e.target.checked); if (!e.target.checked) setNewItemAttunementClasses([]); }} className="w-4 h-4 accent-amber-500" />
+                                          <span className="text-sm text-amber-600 font-medium flex items-center gap-1"><AttuneIcon size={14} /> Requires Attunement</span>
+                                        </label>
+                                        {newItemRequiresAttunement && (
+                                          <div>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Class restriction (leave empty for any class):</p>
+                                            <div className="flex flex-wrap gap-1">
+                                              {CLASSES.map(cls => (
+                                                <button key={cls} type="button"
+                                                  onClick={() => setNewItemAttunementClasses(prev => prev.includes(cls) ? prev.filter(c => c !== cls) : [...prev, cls])}
+                                                  className={`px-2 py-0.5 rounded text-xs border ${newItemAttunementClasses.includes(cls) ? 'bg-amber-400 text-white border-amber-400' : 'bg-white text-gray-600 border-gray-300 dark:border-gray-600'}`}>
+                                                  {cls}
+                                                </button>
+                                              ))}
                                             </div>
-                                          </>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                    {newItemType === 'potion' && (
+                                      <input type="color" value={newItemColor} onChange={(e) => setNewItemColor(e.target.value)} className="w-full mb-2 p-1 border rounded" />
+                                    )}
+                                    {newItemType === 'container' ? (
+                                      <div>
+                                        <select value={newItemContainerSubtype} onChange={(e) => setNewItemContainerSubtype(e.target.value)} className="
+                                            w-full mb-2 dark:text-gray-400 p-2 border rounded
+                                            bg-white
+                                            text-gray-400
+                                            border-gray-300 dark:border-gray-600
+                                            focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400
+                                          "
+                                        >
+                                          <option value="quantity">Quantity Container (quiver, waterskin, etc.)</option>
+                                          <option value="grid">Grid Container (backpack, chest, etc.)</option>
+                                          <option value="coinpurse">Coin Purse</option>
+                                          <option value="stacked">Stacked Bundle (rations, torches, etc.)</option>
+                                        </select>
+                                        <input value={newItemBaseWeight} onChange={(e) => setNewItemBaseWeight(e.target.value)} placeholder="Empty Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                        {newItemContainerSubtype === 'grid' ? (
+                                          <div>
+                                            <input value={newItemInternalCapacity} onChange={(e) => setNewItemInternalCapacity(e.target.value)} placeholder="Internal Capacity (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                            <input value={newItemExternalSlots} onChange={(e) => {
+                                              const val = e.target.value;
+                                              setNewItemExternalSlots(val);
+                                              const n = Math.min(4, Math.max(0, parseInt(val) || 0));
+                                              setNewItemExternalSlotWeights(prev => {
+                                                const arr = [...prev];
+                                                while (arr.length < n) arr.push('');
+                                                return arr.slice(0, n);
+                                              });
+                                            }} placeholder="Number of External Slots (max 4)" type="number" min="0" max="4" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                            {Array.from({ length: parseInt(newItemExternalSlots) || 0 }, (_, i) => (
+                                              <input key={i}
+                                                value={newItemExternalSlotWeights[i] ?? ''}
+                                                onChange={(e) => setNewItemExternalSlotWeights(prev => {
+                                                  const next = [...prev]; next[i] = e.target.value; return next;
+                                                })}
+                                                placeholder={`Slot ${i + 1} max weight (lbs)`}
+                                                type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                            ))}
+                                          </div>
+                                        ) : newItemContainerSubtype === 'quantity' ? (
+                                          <div>
+                                            <div className="flex gap-2 mb-2">
+                                              <button onClick={() => setNewItemFillMode('auto-drain')}
+                                                className={`flex-1 py-1.5 rounded border text-sm ${newItemFillMode === 'auto-drain' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 text-gray-600'}`}>
+                                                Paint Filled Shape
+                                              </button>
+                                              <button onClick={() => setNewItemFillMode('auto-fill')}
+                                                className={`flex-1 py-1.5 rounded border text-sm ${newItemFillMode === 'auto-fill' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 text-gray-600'}`}>
+                                                Auto-Scale from Empty
+                                              </button>
+                                            </div>
+                                            {newItemFillMode === 'auto-fill' ? (
+                                              <>
+                                                <input value={newItemMaxFillWeight} onChange={(e) => setNewItemMaxFillWeight(e.target.value)} placeholder="Max Fill Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                                <input value={newItemIncrementWeight} onChange={(e) => setNewItemIncrementWeight(e.target.value)} placeholder="Weight per unit (lbs, e.g. 8 for 1 gallon)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                                <input value={newItemContentLabel} onChange={(e) => setNewItemContentLabel(e.target.value)} placeholder="Unit label (e.g. gallons, apples)" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                                <p className="text-xs text-gray-400 italic mb-2">Max units = floor(max fill ÷ unit weight). Shape auto-generates — no drawing needed.</p>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <input value={newItemFilledWeight} onChange={(e) => setNewItemFilledWeight(e.target.value)} placeholder="Filled Contents Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                                <input value={newItemMaxUnits} onChange={(e) => setNewItemMaxUnits(e.target.value)} placeholder="Max Units" type="number" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                                <select value={newItemScaleDirection} onChange={(e) => setNewItemScaleDirection(e.target.value)} className="w-full mb-2 dark:text-gray-400 p-2 border rounded bg-white text-gray-400 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                                  <option value="vertical">Scale Vertical</option>
+                                                  <option value="horizontal">Scale Horizontal</option>
+                                                </select>
+                                              </>
+                                            )}
+                                          </div>
+                                        ) : newItemContainerSubtype === 'stacked' ? (
+                                          <div>
+                                            <input value={newItemItemWeight} onChange={(e) => setNewItemItemWeight(e.target.value)}
+                                              placeholder="Weight per item (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                            <input value={newItemCapacityPerUnit} onChange={(e) => setNewItemCapacityPerUnit(e.target.value)}
+                                              placeholder="Items per unit/box" type="number" min="1" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                            <select value={newItemScaleDirection} onChange={(e) => setNewItemScaleDirection(e.target.value)} className="
+                                            w-full mb-2 dark:text-gray-400 p-2 border rounded
+                                            bg-white
+                                            text-gray-400
+                                            border-gray-300 dark:border-gray-600
+                                            focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400
+                                          "
+                                          >
+                                              <option value="horizontal">Fill Horizontal (grows right, then down)</option>
+                                              <option value="vertical">Fill Vertical (grows down, then right)</option>
+                                            </select>
+                                          </div>
+                                        ) : (
+                                          <div>
+                                            <input value={newItemColumnCap} onChange={(e) => setNewItemColumnCap(e.target.value)} placeholder="Lbs of coins per column (default 5)" type="number" step="0.25" min="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                            <input value={newItemMaxColumns} onChange={(e) => setNewItemMaxColumns(e.target.value)} placeholder="Max columns / pouches (default 5)" type="number" min="1" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                          </div>
+                                        ) /* coinpurse */}
+                                      </div>
+                                    ) : (
+                                      <input value={newItemWeight} onChange={(e) => setNewItemWeight(e.target.value)} placeholder="Weight (lbs)" type="number" step="0.25" className="w-full mb-2 dark:text-gray-400 p-2 border rounded" />
+                                    )}
+                                      {(() => {
+                                        const _autoFillContainer = newItemType === 'container' && (
+                                          newItemContainerSubtype === 'grid' ||
+                                          newItemContainerSubtype === 'stacked' ||
+                                          (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill')
                                         );
-                                    })()}
+                                        const _weightless = parseFloat(newItemWeight) === 0 && newItemType !== 'container';
+                                        if (_weightless) return <p className="text-xs text-gray-400 italic mb-2">0-weight items don't need a shape — they go straight to the Weightless Items list.</p>;
+                                        if (_autoFillContainer) return <p className="text-xs text-gray-400 italic mb-2">Shape auto-generates from empty weight — no drawing required.</p>;
+                                        return null;
+                                      })()}
+                                      {(newItemType !== 'container' ? parseFloat(newItemWeight) !== 0 : !(
+                                          newItemContainerSubtype === 'grid' ||
+                                          newItemContainerSubtype === 'stacked' ||
+                                          (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill')
+                                      )) ? (
+                                      <>
+                                        <div className="mb-2">
+                                            <label className="block text-sm font-medium mb-1">Creation Grid Scale: {(creationGridScale * 100).toFixed(0)}%</label>
+                                            <input type="range" min="0.3" max="1" step="0.05" value={creationGridScale} onChange={(e) => setCreationGridScale(parseFloat(e.target.value))} className="w-full" />
+                                        </div>
+                                        <p className="text-sm mb-2">Tap sub-cells to paint shape ({newItemShape.length}/{targetSubCells})</p>
+                                        <div ref={creationGridRef} className="mb-2 inline-block" style={{ touchAction: 'none' }}>
+                                            {[...Array(creationGridHeight)].map((_, row) => (
+                                                <div key={row} className="flex">
+                                                    {[...Array(creationGridWidth)].map((_, col) => {
+                                                        const cellKey = `${row},${col}`;
+                                                        const isSelected = newItemShape.includes(cellKey);
+
+                                                        // Determine which "full cell" this sub-cell belongs to (for checkerboard)
+                                                        const fullCellRow = Math.floor(row / SUB_DIVISIONS);
+                                                        const fullCellCol = Math.floor(col / SUB_DIVISIONS);
+                                                        const isCheckerboardGray = (fullCellRow + fullCellCol) % 2 === 1;
+
+                                                        // Determine if this sub-cell is on a full cell boundary
+                                                        const isTopBoundary = row % SUB_DIVISIONS === 0;
+                                                        const isLeftBoundary = col % SUB_DIVISIONS === 0;
+
+                                                        return (
+                                                            <div
+                                                                key={col}
+                                                                data-row={row}
+                                                                data-col={col}
+                                                                onPointerDown={(e) => {
+                                                                    e.preventDefault();
+                                                                    e.currentTarget.setPointerCapture(e.pointerId);
+
+                                                                    if (creationGridCellMode) {
+                                                                        // Cell mode - paint entire cell block
+                                                                        const fullCellRow = Math.floor(row / SUB_DIVISIONS);
+                                                                        const fullCellCol = Math.floor(col / SUB_DIVISIONS);
+                                                                        const subCells = [];
+                                                                        for (let sr = 0; sr < SUB_DIVISIONS; sr++) {
+                                                                            for (let sc = 0; sc < SUB_DIVISIONS; sc++) {
+                                                                                subCells.push(`${fullCellRow * SUB_DIVISIONS + sr},${fullCellCol * SUB_DIVISIONS + sc}`);
+                                                                            }
+                                                                        }
+                                                                        const wasSelected = subCells.some(cell => newItemShape.includes(cell));
+                                                                        modifyShapeCellBlock(fullCellRow, fullCellCol, wasSelected ? 'remove' : 'add');
+                                                                        setPaintMode(wasSelected ? 'remove' : 'add');
+                                                                        lastPaintedRef.current = { row: fullCellRow, col: fullCellCol };
+                                                                    } else {
+                                                                        // Sub-cell mode - paint individual sub-cell
+                                                                        const cellKey = `${row},${col}`;
+                                                                        const wasSelected = newItemShape.includes(cellKey);
+                                                                        modifyShapeCell(row, col, wasSelected ? 'remove' : 'add');
+                                                                        setPaintMode(wasSelected ? 'remove' : 'add');
+                                                                        lastPaintedRef.current = { row, col };
+                                                                    }
+                                                                    setIsPainting(true);
+                                                                }}
+                                                                className={`cursor-pointer ${isSelected ? 'bg-purple-500' : (isCheckerboardGray ? 'bg-gray-100 dark:bg-gray-800' : 'bg-white')}`}
+                                                                style={{
+                                                                    width: creationSubCellSize,
+                                                                    height: creationSubCellSize,
+                                                                    borderTop: isTopBoundary ? '2px solid #9CA3AF' : (creationGridCellMode ? 'none' : '1px solid #D1D5DB'),
+                                                                    borderLeft: isLeftBoundary ? '2px solid #9CA3AF' : (creationGridCellMode ? 'none' : '1px solid #D1D5DB'),
+                                                                    borderRight: col === creationGridWidth - 1 ? '2px solid #9CA3AF' : 'none',
+                                                                    borderBottom: row === creationGridHeight - 1 ? '2px solid #9CA3AF' : 'none',
+                                                                }}
+                                                            />
+                                                        );
+                                                    })}
+                                                </div>
+                                            ))}
+                                        </div>
+                                        </>) : null}
+                                    <div className="flex gap-2">
+                                        <button onClick={() => editingItemId ? setConfirmLibraryEdit(true) : saveNewItem()} disabled={(() => {
+                                            if (!newItemName) return true;
+                                            const _autoFill = newItemType === 'container' && (newItemContainerSubtype === 'grid' || newItemContainerSubtype === 'stacked' || (newItemContainerSubtype === 'quantity' && newItemFillMode === 'auto-fill'));
+                                            const _weightless = parseFloat(newItemWeight) === 0 && newItemType !== 'container';
+                                            if (_autoFill || _weightless) return false;
+                                            return newItemShape.length !== targetSubCells;
+                                        })()} className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-300">{editingItemId ? 'Save Changes' : 'Save Item'}</button>
+                                        <button onClick={() => { setIsCreatingItem(false); resetItemCreation(); }} className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Cancel</button>
+                                    </div>
                                   </>
                                 )}
                               </>
